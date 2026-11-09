@@ -1,0 +1,32 @@
+# Beispielkonfiguration für tradingagents_quant.
+#
+# Kopieren nach  %LOCALAPPDATA%\tradingagents-quant\taq.toml  (oder TAQ_CONFIG
+# auf eine eigene Datei zeigen lassen). Jeder Wert lässt sich zusätzlich mit
+# TAQ_<ABSCHNITT>_<FELD> überschreiben, z. B. TAQ_UNIVERSE_BENCHMARK=QQQ.
+#
+# Diese Datei enthält nie Zugangsdaten. LLM-Schlüssel (GOOGLE_API_KEY) liest
+# die Agentenschicht direkt aus der Umgebung.
+
+[modes]
+research_mode = true
+backtesting_mode = true
+paper_trading_mode = true
+# live_trading_mode und live_order_execution sind Konstanten. Jeder andere
+# Wert als false bzw. "disabled" bricht den Start ab.
+
+[universe]
+name = "us-core"
+# Breite, Sektor- und defensive ETFs mit Historie ab 1998-2004. Einzelaktien,
+# die man heute kennt, sind bekannt, weil sie überlebt haben (Survivorship Bias).
+symbols = ["SPY", "QQQ", "IWM", "DIA", "TLT", "IEF", "GLD",
+           "XLB", "XLE", "XLF", "XLI", "XLK", "XLP", "XLU", "XLV", "XLY"]
+benchmark = "SPY"
+# Handelstage = die Tage, an denen dieses Symbol einen Bar hat.
+calendar_symbol = "SPY"
+currency = "USD"
+
+[data]
+history_start = "1999-01-01"
+max_stale_days = 10
+# Unter so vielen Bars werden keine annualisierten Kennzahlen ausgewiesen.
+min_annualization_bars = 252

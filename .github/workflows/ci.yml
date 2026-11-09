@@ -2,7 +2,8 @@ name: CI
 
 on:
   push:
-    branches: [main, 'v[0-9]+.[0-9]+.[0-9]+']
+    # evolution: working branch of the tradingagents-evolution fork.
+    branches: [main, evolution, 'v[0-9]+.[0-9]+.[0-9]+']
   pull_request:
 
 concurrency:
@@ -50,6 +51,10 @@ jobs:
           # Catches undeclared runtime deps (e.g. #994 python-dotenv): a bare
           # install must import the package and the CLI module.
           python -c "import tradingagents, cli.main; print('clean-install import OK')"
+          # The research core is a second top-level package: a packaging miss
+          # shows only in a non-editable install like this one.
+          python -c "import tradingagents_quant.cli, tradingagents_quant.config; print('quant import OK')"
+          taq --help
 
   lint:
     name: ruff (strict, full repo)

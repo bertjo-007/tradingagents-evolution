@@ -19,6 +19,9 @@ dependencies = [
     "markdown-it-py>=4.0",
     "packaging>=24.0",
     "pandas>=3.0.6",
+    # Imported directly by tradingagents/agents/schemas.py, tradingagents/portfolio.py
+    # and the whole tradingagents_quant package; previously only transitive.
+    "pydantic>=2.6",
     "python-dotenv>=1.0.0",
     "pytz>=2025.2",
     "questionary>=2.1.0",
@@ -41,19 +44,29 @@ dev = [
 bedrock = [
     "langchain-aws>=1.7.9",
 ]
+# Research dashboard of tradingagents_quant. Optional so the deterministic core
+# carries no web stack: pip install "tradingagents[dashboard]".
+dashboard = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+]
 
 [project.scripts]
 tradingagents = "cli.main:app"
+taq = "tradingagents_quant.cli:app"
 
 [tool.setuptools.dynamic]
 version = {attr = "tradingagents.__version__"}
 
 [tool.setuptools.packages.find]
-include = ["tradingagents*", "cli*"]
+# tradingagents_quant is matched by "tradingagents*" already; it is listed so
+# the deterministic research core is not installed by accident of a glob.
+include = ["tradingagents*", "tradingagents_quant*", "cli*"]
 
 [tool.setuptools.package-data]
 cli = ["static/*"]
 tradingagents = ["assets/*.svg"]
+tradingagents_quant = ["store/*.sql", "api/static/*", "api/static/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
