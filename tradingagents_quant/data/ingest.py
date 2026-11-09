@@ -133,12 +133,19 @@ class Drift:
         return not (self.missing_dates or self.new_dates or self.changed)
 
 
+# Yahoo recomputes adj_close on every request in float32: two fetches minutes
+# apart differ by up to 2.2e-6 relative (measured 2026-11-09 over 108,412 bars;
+# open/high/low/close/volume were bit-identical). A real restatement is far
+# larger: a new dividend moves adjusted history by ~1e-3, a split by 2x.
+DRIFT_TOLERANCE = 1e-5
+
+
 def _same(a: float, b: float) -> bool:
     if math.isnan(a) and math.isnan(b):
         return True
     if math.isnan(a) or math.isnan(b):
         return False
-    return abs(a - b) <= 1e-9 * max(1.0, abs(a), abs(b))
+    return abs(a - b) <= DRIFT_TOLERANCE * max(abs(a), abs(b), 1e-12)
 
 
 def compare_series(symbol: str, stored: pd.DataFrame, fresh: PriceSeries) -> Drift:

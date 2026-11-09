@@ -107,3 +107,22 @@ def test_drift_shows_restated_missing_and_new_values(store):
     assert drift.missing_dates == (DAYS[3],)
     assert [(d, c) for d, c, *_ in drift.changed] == [(DAYS[0], "adj_close")]
     assert not drift.clean
+
+
+def test_float32_noise_in_adjusted_closes_is_not_drift(store):
+    # Measured on Yahoo: adj_close differs between two fetches by up to 2.2e-6.
+    snap = _run(store, FakeProvider({"SPY": yahoo_frame(DAYS, linear_closes(30))}),
+                symbols=("SPY",)).snapshot
+    stored = store.bars(snap.snapshot_id, "SPY")
+    noisy = yahoo_frame(DAYS, linear_closes(30))
+    noisy["Adj Close"] = noisy["Adj Close"] * (1 + 2.2e-6)
+    assert compare_series(
+        "SPY", stored, normalize_vendor_frame("SPY", "SPY", noisy, fetched_at=FETCHED_AT)
+    ).clean
+    # A new quarterly dividend of 0.3% restates every adjusted close: that is drift.
+    restated = yahoo_frame(DAYS, linear_closes(30))
+    restated["Adj Close"] = restated["Adj Close"] * (1 - 3e-3)
+    drift = compare_series(
+        "SPY", stored, normalize_vendor_frame("SPY", "SPY", restated, fetched_at=FETCHED_AT)
+    )
+    assert len(drift.changed) == 30

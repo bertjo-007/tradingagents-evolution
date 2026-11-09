@@ -63,6 +63,25 @@ Jede Serie trägt einen SHA-256 über ihre exakten Werte, der Snapshot einen
 Hash über alle Serien. `taq verify` rechnet beides aus den gespeicherten Zeilen
 nach.
 
+### Yahoos `adj_close` ist nicht deterministisch
+
+Gemessen am 09.11.2026 mit zwei Abrufen des ganzen Universums im Abstand von
+fünf Minuten: `open`, `high`, `low`, `close` und `volume` waren über alle
+108 412 Bars **bit-identisch**, `adj_close` wich bei 85 616 Werten ab, um
+höchstens 2,2 · 10⁻⁶ relativ. Yahoo rechnet die Dividenden-Adjustierung bei
+jedem Abruf in float32 neu. Zwei Snapshots desselben Tages haben deshalb
+verschiedene Hashes, ohne dass sich etwas geändert hat.
+
+Folgen:
+
+- `taq verify --drift` vergleicht mit einer Toleranz von 10⁻⁵ relativ. Echte
+  Restatierungen liegen weit darüber (eine neue Quartalsdividende verschiebt
+  die adjustierte Historie um rund 10⁻³, ein Split um den Faktor 2).
+- **Der Backtester verwendet Yahoos `adj_close` nicht.** Er rechnet die
+  Total-Return-Adjustierung selbst aus `close` und den gespeicherten
+  Dividenden — beides bit-stabil. So liefert derselbe Backtest auf zwei
+  Snapshots mit gleichem Inhalt dasselbe Ergebnis.
+
 ## Qualitätsregeln
 
 Die Regeln melden, sie reparieren nie. Eine Serie mit einem Befund der Stufe
