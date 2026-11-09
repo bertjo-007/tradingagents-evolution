@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 import os
 import sys
+from collections import Counter
 
 import typer
 
 from tradingagents_quant import PAPER_LABEL, __version__, paths
 from tradingagents_quant.config import config_file, load_config
-from tradingagents_quant.errors import ConfigError
+from tradingagents_quant.errors import ConfigError, QuantError
 
 app = typer.Typer(
     add_completion=False,
@@ -36,13 +37,29 @@ def _utf8_output() -> None:
 
 @app.callback()
 def _main() -> None:
-    """Keep ``taq`` a command group even while it has a single command."""
+    """Runs before every command."""
     _utf8_output()
 
 
 def _fail(exc: Exception) -> None:
     typer.secho(f"error: {exc}", fg=typer.colors.RED, err=True)
     raise typer.Exit(code=2)
+
+
+def _open():
+    from tradingagents_quant.data.snapshot import SnapshotStore
+    from tradingagents_quant.store.db import Database
+
+    cfg = load_config()
+    db = Database.open_default()
+    return cfg, db, SnapshotStore(db)
+
+
+def _provider():
+    """The snapshot source: (fetch, source name, source version). Tests replace it."""
+    from tradingagents_quant.data import ingest_yahoo
+
+    return ingest_yahoo.fetch_yahoo, ingest_yahoo.SOURCE, ingest_yahoo.source_version()
 
 
 @app.command("config")
@@ -62,6 +79,139 @@ def show_config() -> None:
     typer.echo(f"fingerprint    : {cfg.fingerprint()}")
     typer.echo(f"orders         : {PAPER_LABEL}")
     typer.echo(json.dumps(cfg.to_dict(), indent=2))
+
+
+@app.command("ingest")
+def ingest_command(
+    symbols: str = typer.Option("", help="Comma-separated symbols; default: the configured universe."),
+    start: str = typer.Option("", help="First date (YYYY-MM-DD); default: data.history_start."),
+    end: str = typer.Option("", help="Last date (YYYY-MM-DD, inclusive); default: last settled day."),
+) -> None:
+    """Fetch history from the provider and seal it as a new immutable snapshot."""
+    from tradingagents_quant.data.ingest import ingest
+
+    try:
+        cfg, db, store = _open()
+        wanted = (
+            tuple(s.strip().upper() for s in symbols.split(",") if s.strip())
+            or cfg.universe.ingest_symbols()
+        )
+        fetch, source, version = _provider()
+        result = ingest(
+            store, symbols=wanted, start=start or cfg.data.history_start, end=end or None,
+            fetch=fetch, source=source, source_version=version, config=cfg,
+        )
+    except QuantError as exc:
+        _fail(exc)
+        return
+    snap = result.snapshot
+    counts = Counter(i.severity for i in result.issues)
+    typer.echo(f"snapshot {snap.snapshot_id} ({snap.status})")
+    typer.echo(f"  series   : {len(snap.series)}   bars: {sum(s.n_bars for s in snap.series)}")
+    typer.echo(f"  issues   : {counts['error']} error, {counts['warning']} warning, {counts['info']} info")
+    for f in result.failures:
+        typer.secho(f"  FAILED   : {f.symbol}: {f.error_type}: {f.detail}", fg=typer.colors.YELLOW)
+    typer.echo("  details  : taq report")
+
+
+@app.command("snapshots")
+def list_snapshots() -> None:
+    """List the sealed snapshots, oldest first."""
+    try:
+        _, _, store = _open()
+        snaps = store.list()
+    except QuantError as exc:
+        _fail(exc)
+        return
+    if not snaps:
+        typer.echo("no snapshot yet; run `taq ingest`")
+    for s in snaps:
+        typer.echo(f"{s.snapshot_id}  {s.status:<8}  {len(s.series):>3} series  "
+                   f"{s.source_version}  config {s.config_fingerprint or '-'}")
+
+
+@app.command("report")
+def report(
+    snapshot: str = typer.Option("", help="Snapshot id; default: the latest."),
+    details: bool = typer.Option(False, help="List every error and warning."),
+) -> None:
+    """Per-series quality report of a snapshot."""
+    try:
+        _, _, store = _open()
+        snap = store.resolve(snapshot or None)
+        issues = store.issues(snap.snapshot_id)
+        failures = store.failures(snap.snapshot_id)
+    except QuantError as exc:
+        _fail(exc)
+        return
+    typer.echo(f"snapshot {snap.snapshot_id} ({snap.status}), created {snap.created_at}")
+    typer.echo(f"source {snap.source} / {snap.source_version}, config {snap.config_fingerprint}")
+    typer.echo(f"{'SYMBOL':<8}{'FIRST':<12}{'LAST':<12}{'BARS':>6}  {'QUALITY':<8}{'ERR':>4}{'WARN':>5}{'INFO':>5}")
+    per = {s.symbol: Counter() for s in snap.series}
+    for i in issues:
+        per.setdefault(i.symbol, Counter())[i.severity] += 1
+    for s in snap.series:
+        c = per[s.symbol]
+        typer.echo(f"{s.symbol:<8}{s.first_date:<12}{s.last_date:<12}{s.n_bars:>6}  {s.quality:<8}"
+                   f"{c['error']:>4}{c['warning']:>5}{c['info']:>5}")
+    for f in failures:
+        typer.secho(f"FAILED  {f.symbol}: {f.error_type}: {f.detail}", fg=typer.colors.YELLOW)
+    if details:
+        for i in issues:
+            if i.severity != "info":
+                typer.echo(f"  {i.severity:<7} {i.symbol:<6} {i.date or '':<10} {i.rule}: {i.detail}")
+
+
+@app.command("verify")
+def verify(
+    snapshot: str = typer.Option("", help="Snapshot id; default: the latest."),
+    drift: bool = typer.Option(False, help="Also re-fetch and compare with the provider (network)."),
+) -> None:
+    """Re-hash the stored data; with --drift, show what the provider has restated since."""
+    from tradingagents_quant.data.ingest import compare_series
+    from tradingagents_quant.data.normalize import normalize_vendor_frame
+
+    try:
+        _, _, store = _open()
+        snap = store.resolve(snapshot or None)
+        broken = store.verify_integrity(snap.snapshot_id)
+    except QuantError as exc:
+        _fail(exc)
+        return
+    if broken:
+        for symbol, (stored, now) in broken.items():
+            typer.secho(f"CORRUPT {symbol}: stored {stored[:12]} != recomputed {now[:12]}",
+                        fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    typer.echo(f"integrity ok: {snap.snapshot_id}, {len(snap.series)} series match their hashes")
+    if not drift:
+        return
+    from datetime import UTC, datetime
+
+    fetch, _, _ = _provider()
+    restated = 0
+    for s in snap.series:
+        try:
+            raw = fetch(s.symbol, snap.requested_start, s.last_date)
+        except QuantError as exc:
+            typer.secho(f"  {s.symbol}: not re-fetched ({exc})", fg=typer.colors.YELLOW)
+            continue
+        fresh = normalize_vendor_frame(s.symbol, raw.canonical, raw.frame,
+                                       fetched_at=datetime.now(UTC), currency=raw.currency)
+        result = compare_series(s.symbol, store.bars(snap.snapshot_id, s.symbol), fresh)
+        if result.clean:
+            typer.echo(f"  {s.symbol}: unchanged")
+            continue
+        restated += 1
+        first = result.changed[0] if result.changed else None
+        typer.secho(
+            f"  {s.symbol}: {len(result.changed)} values changed, {len(result.missing_dates)} dates "
+            f"gone, {len(result.new_dates)} new" + (f"; first: {first[0]} {first[1]} "
+                                                    f"{first[2]} -> {first[3]}" if first else ""),
+            fg=typer.colors.YELLOW,
+        )
+    typer.echo(f"drift: {restated} of {len(snap.series)} series restated by the provider since "
+               f"{snap.created_at}. The snapshot itself is unchanged.")
 
 
 if __name__ == "__main__":

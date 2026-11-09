@@ -23,6 +23,33 @@ class LiveTradingForbiddenError(ConfigError):
     """
 
 
+class DataError(QuantError):
+    """Market data could not be obtained or is unfit for use."""
+
+
+class DataUnavailableError(DataError):
+    """The provider could not answer: unreachable, throttled, failed.
+
+    Says nothing about the instrument. Nothing is filled in for it.
+    """
+
+
+class NoDataError(DataError):
+    """The provider answered that it has no data for the instrument."""
+
+
+class IngestError(DataError):
+    """An ingest produced nothing usable, so no snapshot was written."""
+
+
+class SnapshotError(QuantError):
+    """A snapshot is missing, or its stored data no longer matches its hash."""
+
+
+class SchemaError(QuantError):
+    """The database schema is newer than this code, or a migration failed."""
+
+
 class UnsafeStorageLocationError(ConfigError):
     """The database or snapshot directory lies inside a synced folder.
 

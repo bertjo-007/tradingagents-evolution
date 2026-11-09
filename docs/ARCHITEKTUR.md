@@ -98,8 +98,8 @@ Corporate Actions.
 ```
 tradingagents_quant/
   config.py  paths.py  errors.py  cli.py              M0
-  store/      schema.sql · db.py · repo.py            M1  sqlite3, PRAGMA user_version
-  data/       snapshot.py · ingest_yahoo.py · quality.py
+  store/      migrations.py · db.py                   M1  sqlite3, PRAGMA user_version
+  data/       normalize · quality · snapshot · ingest · ingest_yahoo
   indicators/ core.py · registry.py                   M2
   regime.py
   strategy/   spec.py · library.py                    M3/M4
@@ -188,7 +188,7 @@ nur mit dem Extra `[dashboard]`.
 | M | Inhalt | Status |
 |---|---|---|
 | M0 | Fork, Umgebung, Paketnaht, Konfiguration, Speicherorte, Grenztests, dieser Bericht | erledigt |
-| M1 | Snapshot-Store (unveränderlich, gehasht), Ingest mit Corporate Actions, Qualitätsregeln, CLI `ingest`/`verify`/`report` | offen |
+| M1 | Snapshot-Store (unveränderlich, gehasht), Ingest mit Corporate Actions, Qualitätsregeln, CLI `ingest`/`verify`/`report` — siehe [DATEN.md](DATEN.md) | erledigt |
 | M2 | Indikatoren, Regime-Klassifikation; Paritäts- und Kausalitätstests | offen |
 | M3 | Single-Asset-Engine mit Kosten, Slippage, Stops, Sizing, Kennzahlen; Oracle-, Shift- und Trunkierungstest | offen |
 | M4 | Portfolio-Ebene, Strategie-Bibliothek, Benchmarks | offen |
