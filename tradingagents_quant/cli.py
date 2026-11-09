@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
 import sys
+import time
 from collections import Counter
 from typing import Annotated
 
@@ -455,6 +457,91 @@ def experiments_command(limit: int = typer.Option(20, help="How many, newest fir
             nums = f"OOS Sharpe {_fmt(r['oos'], 'num')} vs B&H {_fmt(r['bh'], 'num')}, {test}"
         typer.echo(f"{r['experiment_id']}  {r['hypothesis_id'] or '-':<6} {r['rule']:<18} "
                    f"{r['symbols'][:30]:<31} {r['verdict'] or r['status']:<18} {nums}")
+
+
+def _agent_graph_config(cfg) -> dict:
+    """The agent framework's configuration from [agents]."""
+    import copy
+
+    from tradingagents.default_config import DEFAULT_CONFIG
+
+    graph_config = copy.deepcopy(DEFAULT_CONFIG)
+    graph_config.update(
+        llm_provider=cfg.agents.llm_provider, quick_think_llm=cfg.agents.quick_model,
+        deep_think_llm=cfg.agents.deep_model, max_debate_rounds=cfg.agents.max_debate_rounds,
+        max_risk_discuss_rounds=cfg.agents.max_risk_discuss_rounds)
+    return graph_config
+
+
+@app.command("agent")
+def agent_command(
+    ticker: str = typer.Option(..., help="Instrument (must be in a snapshot for the risk gate)."),
+    date: str = typer.Option(..., help="Analysis date YYYY-MM-DD; data is served as of it."),
+    analysts: str = typer.Option("", help="Comma-separated (default: [agents].analysts)."),
+    cache: str = typer.Option("", help="record | replay | off (default: [agents].llm_cache)."),
+    yes: bool = typer.Option(False, "--yes", help="Confirm a run that calls the model (costs money)."),
+    save: bool = typer.Option(True, help="Write the report tree."),
+) -> None:
+    """Run the multi-agent analysis; the deterministic risk gate checks its decision."""
+    from tradingagents_quant.bridge import llm
+
+    try:
+        cfg, _, _ = _open()
+        mode = cache or cfg.agents.llm_cache
+        if mode not in ("record", "replay", "off"):
+            raise ConfigError(f"--cache must be record, replay or off, not {mode!r}")
+        if mode != "replay" and not yes:
+            raise ConfigError(
+                f"this run calls {cfg.agents.llm_provider} ({cfg.agents.quick_model} / "
+                f"{cfg.agents.deep_model}) and costs money: up to {cfg.agents.max_tokens_per_run:,} "
+                "tokens. Add --yes to run it, or --cache replay to repeat a recorded run for free.")
+        notes = []
+        if (cfg.agents.llm_provider == "google" and not os.environ.get("GOOGLE_API_KEY")
+                and os.environ.get("GEMINI_API_KEY")):
+            os.environ["GOOGLE_API_KEY"] = os.environ["GEMINI_API_KEY"]  # this process only
+            notes.append("GOOGLE_API_KEY taken from GEMINI_API_KEY for this run (not stored)")
+        db_path = paths.db_path(paths.data_home())
+        run_id = "ag-" + hashlib.sha256(f"{ticker}|{date}|{time.time_ns()}".encode()).hexdigest()[:10]
+        cache_obj, budget = llm.install(db_path, mode=mode, run_id=run_id,
+                                        max_run=cfg.agents.max_tokens_per_run,
+                                        max_day=cfg.agents.max_tokens_per_day)
+    except QuantError as exc:
+        _fail(exc)
+        return
+    chosen = tuple(a.strip() for a in analysts.split(",") if a.strip()) or cfg.agents.analysts
+    try:
+        from tradingagents.graph.trading_graph import TradingAgentsGraph
+
+        graph = TradingAgentsGraph(selected_analysts=chosen, config=_agent_graph_config(cfg),
+                                   callbacks=[budget])
+        state, rating = graph.propagate(ticker.upper(), date)
+        report_dir = graph.save_reports(state, ticker.upper()) if save else None
+    except Exception as exc:  # a model, budget or replay stop ends the run, not the program
+        _fail(f"the agent run stopped: {type(exc).__name__}: {exc}")
+        return
+    finally:
+        llm.uninstall()
+    verdict, order = state.get("risk_verdict") or {}, state.get("sim_order") or {}
+    typer.echo(f"{PAPER_LABEL} — agent analysis, checked by the deterministic risk gate")
+    typer.echo(f"{ticker.upper()} on {date}: agents' rating {rating}")
+    colour = typer.colors.GREEN if verdict.get("status") == "approved" else typer.colors.YELLOW
+    typer.secho(f"risk gate: {str(verdict.get('status', 'missing')).upper()}", fg=colour, bold=True)
+    for reason in verdict.get("reasons", []):
+        typer.echo(f"  - {reason}")
+    if order:
+        typer.echo("simulated order: " + ", ".join(f"{k} {v}" for k, v in order.items()
+                                                   if k != "label"))
+    typer.echo(f"model calls: {budget.calls} ({budget.cached_calls} from the cache), "
+               f"{budget.run_tokens:,} tokens charged to the budget")
+    if cache_obj is not None:
+        typer.echo(f"cache ({mode}): {cache_obj.hits} hits, {cache_obj.misses} misses, "
+                   f"{cache_obj.stored} new answers stored")
+    if verdict.get("decision_id"):
+        typer.echo(f"decision recorded as {verdict['decision_id']}")
+    if report_dir:
+        typer.echo(f"reports: {report_dir}")
+    for note in notes:
+        typer.echo(f"note: {note}")
 
 
 paper_app = typer.Typer(no_args_is_help=True, help=f"Paper trading. {PAPER_LABEL}.")

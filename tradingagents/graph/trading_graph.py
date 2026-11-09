@@ -161,6 +161,8 @@ class TradingAgentsGraph:
             # before the Memory Log step would resume without the lessons.
             "analysts=parallel",
             "memory=parallel",
+            # A checkpoint from before the risk gate ends at the Portfolio Manager.
+            "risk_gate=v1",
             f"settings={digest}",
         ])
 

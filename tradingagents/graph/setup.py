@@ -182,6 +182,13 @@ class GraphSetup:
                 RISK_ANALYSIS_PATH_MAP,
             )
 
-        workflow.add_edge("Portfolio Manager", END)
+        # A deterministic check of the decision before anything comes of it: data,
+        # consistency, the agents' numbers against the market, the risk engine.
+        # Plain code, no model; it adds its own keys and changes none of the agents'.
+        from tradingagents_quant.bridge.gate import create_risk_gate
+
+        workflow.add_node("Risk Gate", create_risk_gate())
+        workflow.add_edge("Portfolio Manager", "Risk Gate")
+        workflow.add_edge("Risk Gate", END)
 
         return workflow

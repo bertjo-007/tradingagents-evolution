@@ -194,7 +194,7 @@ nur mit dem Extra `[dashboard]`.
 | M4 | Portfolio-Ebene, Strategie-Bibliothek, Benchmarks — siehe [STRATEGIEN.md](STRATEGIEN.md) | erledigt |
 | M5 | Walk-Forward (embargoed), robuste Optimierung, Deflated Sharpe, Sharpe-Differenztest, Experiment-Register, Präregistrierung — siehe [VALIDIERUNG.md](VALIDIERUNG.md) | erledigt |
 | M6 | Risiko-Engine, Paper-Trading als dieselbe Engine (Stepper) mit Hash-Ketten-Hauptbuch — siehe [RISIKO.md](RISIKO.md), [PAPER_TRADING.md](PAPER_TRADING.md) | erledigt |
-| M7 | Risiko-Tor im Agentengraphen, LLM-Replay-Cache, Token-Budget | offen |
+| M7 | Risiko-Tor im Agentengraphen, LLM-Replay-Cache, Token-Budget — siehe [AGENTEN.md](AGENTEN.md) | erledigt |
 | M8 | API und Dashboard | offen |
 | M9 | Research-Loop, Evaluation und Kalibrierung, Doku, Windows-CI | offen |
 

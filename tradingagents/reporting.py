@@ -70,6 +70,9 @@ _SECTIONS = (
     ("V. Portfolio Manager Decision", "5_portfolio", (
         ("Portfolio Manager", "decision.md", ("final_trade_decision",)),
     )),
+    ("VI. Deterministic Risk Gate", "6_risk_gate", (
+        ("Risk Gate", "verdict.md", ("risk_gate_report",)),
+    )),
 )
 
 

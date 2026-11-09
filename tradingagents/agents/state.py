@@ -71,3 +71,10 @@ class AgentState(MessagesState):
     past_context: Annotated[str, "Memory log context for the Portfolio Manager (same-ticker decisions + cross-ticker lessons), written by the Memory Log step"]
     memory_note: Annotated[str, "What the Memory Log step could not settle or read this run, for the report; empty when all went well"]
     portfolio_context: Annotated[str, "Caller-supplied holdings and cash, rendered at run start; empty when not provided"]
+
+    # deterministic risk gate (tradingagents_quant.bridge.gate), after the
+    # Portfolio Manager. It adds these keys and changes none of the above.
+    risk_verdict: Annotated[dict, "The gate's verdict: approved or blocked, with every check"]
+    sim_order: Annotated[dict, "The simulated order the verdict allows (paper only); empty when blocked"]
+    data_quality: Annotated[dict, "The research data the gate checked the decision against"]
+    risk_gate_report: Annotated[str, "The gate's verdict in words, for the report"]

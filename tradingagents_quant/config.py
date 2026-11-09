@@ -171,6 +171,35 @@ class RiskSettings(_Section):
     max_risk_per_trade: float = Field(default=0.02, gt=0, le=1.0)  # loss at the stop / equity
 
 
+class AgentSettings(_Section):
+    """The LLM agent layer: which models, how runs are recorded, what they may
+    spend. Model ids come from tradingagents/llm_clients/model_catalog.py. The
+    API key is read from the environment by the agent framework and never
+    passes through here."""
+
+    llm_provider: str = "google"
+    quick_model: str = "gemini-3.5-flash-lite"  # analysts, debates, trader
+    deep_model: str = "gemini-3.8-flash"  # research manager, portfolio manager
+    # record: answer from the cache when possible, store every new answer.
+    # replay: answer only from the cache; a missing answer stops the run.
+    # off: no cache.
+    llm_cache: Literal["record", "replay", "off"] = "record"
+    max_tokens_per_run: int = Field(default=600_000, ge=1)
+    max_tokens_per_day: int = Field(default=3_000_000, ge=1)
+    analysts: tuple[str, ...] = ("market", "social", "news", "fundamentals")
+    max_debate_rounds: int = Field(default=1, ge=1, le=5)
+    max_risk_discuss_rounds: int = Field(default=1, ge=1, le=5)
+    # Agent figures that disagree with the snapshot by more than this are an error.
+    max_entry_deviation: float = Field(default=0.10, gt=0, le=1.0)
+
+    @field_validator("analysts", mode="before")
+    @classmethod
+    def _analysts(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            value = value.split(",")
+        return tuple(str(v).strip() for v in value if str(v).strip())
+
+
 class QuantConfig(_Section):
     modes: Modes = Modes()
     universe: Universe = Universe()
@@ -178,6 +207,7 @@ class QuantConfig(_Section):
     costs: CostSettings = CostSettings()
     backtest: BacktestSettings = BacktestSettings()
     risk: RiskSettings = RiskSettings()
+    agents: AgentSettings = AgentSettings()
 
     def to_dict(self) -> dict[str, Any]:
         return self.model_dump(mode="json")
@@ -196,6 +226,7 @@ _SECTIONS: dict[str, type[_Section]] = {
     "costs": CostSettings,
     "backtest": BacktestSettings,
     "risk": RiskSettings,
+    "agents": AgentSettings,
 }
 
 

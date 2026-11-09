@@ -22,9 +22,16 @@ def utc_now() -> str:
 class Database:
     """One connection, in autocommit mode; ``transaction()`` groups writes."""
 
-    def __init__(self, path: Path | str) -> None:
+    def __init__(self, path: Path | str, *, read_only: bool = False) -> None:
         self.path = path
         memory = str(path) == ":memory:"
+        if read_only:
+            # Never creates a file, never migrates, never writes.
+            uri = Path(path).resolve().as_uri() + "?mode=ro"
+            self._conn = sqlite3.connect(uri, uri=True, isolation_level=None, timeout=10.0)
+            self._conn.row_factory = sqlite3.Row
+            self._conn.execute("PRAGMA busy_timeout = 10000")
+            return
         if not memory:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         # isolation_level=None: no implicit BEGIN; transactions are explicit.

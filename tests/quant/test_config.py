@@ -152,8 +152,15 @@ def test_the_configuration_has_no_place_for_a_secret():
                 found += names(annotation)
         return found
 
-    suspicious = [n for n in names(QuantConfig) if any(w in n for w in ("key", "token", "secret", "password"))]
+    # Whole words: "api_key", "auth_token", "secret" are suspicious;
+    # "max_tokens_per_run" is a budget, not a credential.
+    import re
+
+    secret = re.compile(r"(^|_)(key|token|secret|password|credential)s?($|_)")
+    suspicious = [n for n in names(QuantConfig) if secret.search(n) and n != "max_tokens_per_run"
+                  and n != "max_tokens_per_day"]
     assert suspicious == []
+    assert secret.search("api_key") and secret.search("auth_token") and secret.search("secret")
 
 
 def test_cli_prints_the_configuration_and_the_paper_label(tmp_path):

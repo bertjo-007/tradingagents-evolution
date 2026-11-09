@@ -64,3 +64,20 @@ correlation_threshold = 0.90     # ab dieser 60-Tage-Korrelation gelten Position
 correlation_window = 60
 require_stop = false             # true: Einstieg ohne Stop wird abgewiesen
 max_risk_per_trade = 0.02        # Verlust bis zum Stop / Kapital
+
+[agents]
+# Die LLM-Agentenschicht. Modell-IDs aus tradingagents/llm_clients/model_catalog.py.
+# Der API-Schlüssel (GOOGLE_API_KEY) kommt aus der Umgebung, nie aus dieser Datei.
+llm_provider = "google"
+quick_model = "gemini-3.5-flash-lite"   # Analysten, Debatten, Trader
+deep_model = "gemini-3.8-flash"         # Research Manager, Portfolio Manager
+# record: aus dem Cache antworten, wenn möglich, jede neue Antwort speichern
+# replay: nur aus dem Cache; eine fehlende Antwort stoppt den Lauf
+# off:    kein Cache
+llm_cache = "record"
+max_tokens_per_run = 600000
+max_tokens_per_day = 3000000
+analysts = ["market", "social", "news", "fundamentals"]
+max_debate_rounds = 1
+max_risk_discuss_rounds = 1
+max_entry_deviation = 0.10              # Agenten-Kurse, die so weit vom Snapshot abweichen, sind ein Fehler

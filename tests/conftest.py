@@ -39,6 +39,9 @@ def _own_file_locations():
     os.environ["TRADINGAGENTS_RESULTS_DIR"] = os.path.join(home, "logs")
     os.environ["TRADINGAGENTS_CACHE_DIR"] = os.path.join(home, "cache")
     os.environ["TRADINGAGENTS_MEMORY_LOG_PATH"] = os.path.join(home, "memory", "trading_memory.md")
+    # The research core (tradingagents_quant) keeps its database in the user's
+    # local data directory, and the risk gate in the agent graph reads it.
+    os.environ["TAQ_DATA_DIR"] = os.path.join(home, "quant")
 
 
 _own_file_locations()

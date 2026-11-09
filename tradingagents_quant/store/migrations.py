@@ -302,11 +302,60 @@ CREATE TABLE paper_states (
 
 _V4_TRIGGERS = "".join(_append_only(t) for t in ("paper_accounts", "paper_ledger", "paper_states"))
 
+_V5_AGENTS = """
+-- Every decision of the agent graph as the deterministic risk gate judged it:
+-- traceable to the data (snapshot), the agents' output (hash of the reports
+-- and plans), the risk verdict and the simulated order it led to.
+CREATE TABLE agent_decisions (
+    decision_id      TEXT PRIMARY KEY,
+    created_at       TEXT NOT NULL,
+    symbol           TEXT NOT NULL,
+    trade_date       TEXT NOT NULL,
+    final_rating     TEXT,
+    gate_status      TEXT NOT NULL CHECK (gate_status IN ('approved', 'blocked')),
+    snapshot_id      TEXT,
+    reports_sha256   TEXT NOT NULL,
+    decisions_json   TEXT NOT NULL,
+    verdict_json     TEXT NOT NULL,
+    sim_order_json   TEXT NOT NULL,
+    data_quality_json TEXT NOT NULL,
+    config_fingerprint TEXT,
+    code_version     TEXT NOT NULL
+);
+CREATE INDEX agent_decisions_by_symbol ON agent_decisions(symbol, trade_date);
+
+-- Recorded model answers, by a hash of model settings and prompt: a run can be
+-- replayed exactly and without cost.
+CREATE TABLE llm_cache (
+    cache_key    TEXT PRIMARY KEY,
+    created_at   TEXT NOT NULL,
+    llm_string   TEXT NOT NULL,
+    prompt_sha256 TEXT NOT NULL,
+    value_json   TEXT NOT NULL
+) WITHOUT ROWID;
+
+-- What each model call used, for the token budget.
+CREATE TABLE llm_calls (
+    id             INTEGER PRIMARY KEY,
+    ts             TEXT NOT NULL,
+    day            TEXT NOT NULL,
+    run_id         TEXT NOT NULL,
+    model          TEXT,
+    input_tokens   INTEGER NOT NULL,
+    output_tokens  INTEGER NOT NULL,
+    cached         INTEGER NOT NULL
+);
+CREATE INDEX llm_calls_by_day ON llm_calls(day);
+"""
+
+_V5_TRIGGERS = "".join(_append_only(t) for t in ("agent_decisions", "llm_cache", "llm_calls"))
+
 MIGRATIONS: tuple[str, ...] = (
     _V1_SNAPSHOTS + _V1_TRIGGERS,
     _V2_BACKTESTS + _V2_TRIGGERS,
     _V3_EXPERIMENTS + _V3_TRIGGERS,
     _V4_PAPER + _V4_TRIGGERS,
+    _V5_AGENTS + _V5_TRIGGERS,
 )
 
 SCHEMA_VERSION = len(MIGRATIONS)
