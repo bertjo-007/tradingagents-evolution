@@ -15,7 +15,9 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from tradingagents_quant.sim.types import SimulationResult
+from tradingagents_quant.sim.types import PortfolioResult, SimulationResult
+
+Result = SimulationResult | PortfolioResult
 
 PERIODS_PER_YEAR = 252
 
@@ -48,7 +50,7 @@ def _longest_underwater(dd: pd.Series) -> int:
 
 
 def compute(
-    result: SimulationResult,
+    result: Result,
     *,
     initial_cash: float,
     risk_free_rate: float = 0.0,
@@ -98,7 +100,9 @@ def compute(
         "avg_loss": _round(float(np.mean(losses)), 6) if losses else None,
         "avg_trade_return": _round(float(np.mean([t.return_pct for t in closed]))) if closed else None,
         "avg_holding_bars": _round(float(np.mean([t.holding_bars for t in closed])), 4) if closed else None,
-        "exposure": _round(float((result.shares > 0).mean())),
+        "exposure": _round(float(result.invested.mean())),
+        "avg_gross_exposure": (_round(float(result.gross_exposure.mean()))
+                               if result.gross_exposure is not None else None),
         "turnover": _round(traded / mean_equity) if mean_equity > 0 else None,
         "turnover_per_year": (_round(traded / mean_equity / years)
                               if annualize and mean_equity > 0 else None),
@@ -125,14 +129,14 @@ def compare(strategy: dict[str, Any], benchmark: dict[str, Any]) -> dict[str, An
     return out
 
 
-def by_regime(result: SimulationResult, initial_cash: float) -> dict[str, dict[str, Any]]:
+def by_regime(result: Result, initial_cash: float) -> dict[str, dict[str, Any]]:
     """Returns split by the regime that was known while the position was held:
     the return of bar t belongs to the label of bar t-1."""
     if result.regimes is None:
         return {}
     returns = equity_returns(result.equity, initial_cash)
     label = result.regimes["regime"].shift(1).fillna("unknown")
-    held = (result.shares.shift(1).fillna(0.0) > 0)
+    held = result.invested.shift(1, fill_value=False)
     out = {}
     for regime in sorted(set(label)):
         mask = label == regime

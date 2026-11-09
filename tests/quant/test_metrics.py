@@ -16,8 +16,9 @@ def _result(equity, shares=None, trades=(), fills=(), regimes=None, dividends=0.
     idx = pd.bdate_range("2024-01-01", periods=len(equity))
     eq = pd.Series(equity, index=idx, dtype=float)
     sh = pd.Series(shares if shares is not None else [1.0] * len(equity), index=idx, dtype=float)
-    return SimulationResult("T", eq, eq * 0, sh, sh * 0, list(fills), list(trades), [], dividends,
-                            [], regimes.set_index(idx) if regimes is not None else None)
+    return SimulationResult(fills=list(fills), symbol="T", equity=eq, cash=eq * 0, shares=sh,
+                            target=sh * 0, trades=list(trades), dividends=dividends,
+                            regimes=regimes.set_index(idx) if regimes is not None else None)
 
 
 def _trade(pnl, bars=5):

@@ -131,19 +131,22 @@ taq backtest --param fast=20 --param slow=100 --sizing vol_target --stop atr:3 -
 taq backtest --max-hold 60 --signal-prices price --no-save
 ```
 
-## Erste Ergebnisse — und was sie nicht bedeuten
+## Benchmarks
 
-SMA-Kreuzung 50/200, 2005-01-03 bis 2026-11-06, Standardkosten:
+Jeder Lauf wird gegen Buy & Hold derselben Instrumente (Dividenden
+reinvestiert), den Index, die SMA-50/200-Baseline und Cash gerechnet; siehe
+[STRATEGIEN.md](STRATEGIEN.md#benchmarks). Mehrere Instrumente:
+`--symbol XLK,XLE,XLV`; jedes erhält höchstens 1/*N* des Kapitals.
 
-| | SPY Strategie | SPY Buy & Hold | QQQ Strategie | QQQ Buy & Hold |
-|---|---|---|---|---|
-| CAGR | 8,4 % | 9,8 % | 11,4 % | 13,9 % |
-| Sharpe | 0,66 | 0,63 | 0,72 | 0,73 |
-| Max. Drawdown | −33 % | −52 % | −28 % | −53 % |
+## Ergebnisse
 
-Die Trendfilter tauschen Rendite gegen kleinere Drawdowns; einen
-risikobereinigten Vorteil zeigen sie nicht. Und selbst das ist **in-sample**:
-ein Parametersatz, auf derselben Periode gewählt und gemessen. Ob es hält,
-entscheidet erst die Walk-Forward-Validierung (M5). Positiv ist ein
-Backtest erst dann, wenn er dort besteht — und auch dann ist er keine
-Garantie für die Zukunft.
+Die aktuellen Befunde aller Regeln stehen in
+[STRATEGIEN.md](STRATEGIEN.md#stand-der-befunde). Kurz: keine Regel schlägt
+Buy-and-Hold bei der Rendite, die Sharpe-Unterschiede liegen im Rauschen, alle
+verkleinern den Drawdown. In-sample. Positiv ist ein Backtest erst, wenn er die
+Walk-Forward-Validierung besteht — und auch dann ist er keine Garantie für die
+Zukunft.
+
+Eine frühere Fassung dieses Abschnitts verglich mit einem Buy-and-Hold ohne
+Dividenden-Reinvestition (CAGR 9,8 % statt 10,6 %); dieser Benchmark war zu
+schwach und ist ersetzt.

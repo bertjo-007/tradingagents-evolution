@@ -235,6 +235,10 @@ def _parse_level(text: str) -> tuple[str, float]:
     return kind, float(value)
 
 
+_BENCH_LABELS = {"buy_and_hold": "buy & hold", "index": "index", "sma_baseline": "SMA 50/200",
+                 "cash": "cash"}
+
+
 def _fmt(value, kind: str = "pct") -> str:
     if value is None:
         return "n/a"
@@ -250,7 +254,7 @@ def _fmt(value, kind: str = "pct") -> str:
 @app.command("backtest")
 def backtest_command(
     strategy: str = typer.Option("sma_cross", help="Rule name (see strategy library)."),
-    symbol: str = typer.Option("SPY", help="Instrument in the snapshot."),
+    symbol: str = typer.Option("SPY", help="Instrument(s) in the snapshot, comma-separated."),
     start: str = typer.Option("", help="First day of the test window (YYYY-MM-DD)."),
     end: str = typer.Option("", help="Last day of the test window (YYYY-MM-DD)."),
     param: Annotated[list[str] | None, typer.Option(
@@ -264,7 +268,8 @@ def backtest_command(
     snapshot: str = typer.Option("", help="Snapshot id; default: the latest."),
     save: bool = typer.Option(True, help="Store the run in the database."),
 ) -> None:
-    """Backtest one strategy on one instrument against buy and hold. Simulated, not real money."""
+    """Backtest a strategy on one or more instruments against buy and hold, the index,
+    a moving-average baseline and cash. Simulated, not real money."""
     from tradingagents_quant.sim import persist
     from tradingagents_quant.sim.runner import run_backtest
     from tradingagents_quant.strategy.spec import ExitSpec, SizingSpec, StrategySpec
@@ -274,11 +279,11 @@ def backtest_command(
         stop_kind, stop_value = _parse_level(stop)
         take_kind, take_value = _parse_level(take)
         spec = StrategySpec(
-            name=strategy, rule=strategy, params=_parse_params(param or []), symbols=(symbol,),
+            name=strategy, rule=strategy, params=_parse_params(param or []), symbols=symbol,
             signal_prices=signal_prices, sizing=SizingSpec(method=sizing, fraction=fraction),
             exits=ExitSpec(stop_loss=stop_kind, stop_value=stop_value, take_profit=take_kind,
                            take_value=take_value, max_holding_bars=max_hold or None),
-            benchmark=symbol.upper(),
+            benchmark=cfg.universe.benchmark,
         )
         run = run_backtest(store, spec, cfg, snapshot_id=snapshot or None,
                            start=start or None, end=end or None)
@@ -286,18 +291,21 @@ def backtest_command(
     except (QuantError, ValueError) as exc:
         _fail(exc)
         return
-    s, b = run.metrics, run.benchmark_metrics or {}
+    s = run.metrics
+    columns = [("strategy", s)] + [(_BENCH_LABELS.get(b.name, b.name), b.metrics)
+                                   for b in run.benchmarks]
     typer.echo(f"{PAPER_LABEL} — simulated backtest")
     typer.echo(f"{spec.name} on {run.symbol}, {s['start']}..{s['end']} ({s['bars']} bars), "
                f"snapshot {run.snapshot_id}, strategy version {spec.version_hash()}")
-    typer.echo(f"{'':<22}{'strategy':>14}{'buy & hold':>14}")
+    typer.echo(f"{'':<16}" + "".join(f"{name:>13}" for name, _ in columns))
     rows = [("total return", "total_return", "pct"), ("CAGR", "cagr", "pct"),
             ("volatility", "volatility", "share"), ("Sharpe", "sharpe", "num"),
             ("Sortino", "sortino", "num"), ("max drawdown", "max_drawdown", "pct"),
-            ("exposure", "exposure", "share"), ("final equity", "final_equity", "cash"),
-            ("costs", "total_costs", "cash"), ("dividends", "dividends", "cash")]
+            ("days invested", "exposure", "share"), ("avg exposure", "avg_gross_exposure", "share"),
+            ("final equity", "final_equity", "cash"), ("costs", "total_costs", "cash"),
+            ("dividends", "dividends", "cash")]
     for label, key, kind in rows:
-        typer.echo(f"{label:<22}{_fmt(s.get(key), kind):>14}{_fmt(b.get(key), kind):>14}")
+        typer.echo(f"{label:<16}" + "".join(f"{_fmt(mt.get(key), kind):>13}" for _, mt in columns))
     typer.echo(f"trades {s['trades']} closed{' + 1 open' if s['open_trade'] else ''}, "
                f"win rate {_fmt(s['win_rate'])}, profit factor {_fmt(s['profit_factor'], 'num')}, "
                f"avg holding {_fmt(s['avg_holding_bars'], 'num')} bars, exits {s['exit_reasons']}")

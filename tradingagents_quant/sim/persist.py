@@ -9,9 +9,11 @@ from typing import Any
 from tradingagents_quant.config import QuantConfig
 from tradingagents_quant.provenance import code_version
 from tradingagents_quant.sim.runner import BacktestRun
-from tradingagents_quant.sim.types import SimulationResult
+from tradingagents_quant.sim.types import PortfolioResult, SimulationResult
 from tradingagents_quant.store.db import Database, utc_now
 from tradingagents_quant.strategy.spec import StrategySpec
+
+Result = SimulationResult | PortfolioResult
 
 
 def _ensure_strategy(conn, spec: StrategySpec, now: str) -> str:
@@ -39,15 +41,16 @@ def _run_id(*parts: str) -> str:
 
 
 def _insert(conn, *, run_id: str, now: str, kind: str, version: str, run: BacktestRun,
-            result: SimulationResult, metrics: dict[str, Any], fingerprint: str,
+            result: Result, metrics: dict[str, Any], fingerprint: str,
             parent: str | None, experiment_id: str | None, regimes: dict | None,
-            notes: list[str] | None) -> None:
+            notes: list[str] | None, symbol: str | None = None, sha: str | None = None) -> None:
     conn.execute(
         "INSERT INTO backtest_runs (run_id, created_at, kind, strategy_version, symbol, snapshot_id, "
         "series_sha256, start_date, end_date, config_fingerprint, code_version, parent_run_id, "
         "experiment_id, metrics_json, regimes_json, notes_json) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (run_id, now, kind, version, run.symbol, run.snapshot_id, run.series_sha256,
+        (run_id, now, kind, version, symbol or run.symbol, run.snapshot_id,
+         sha or run.series_sha256,
          metrics["start"], metrics["end"], fingerprint, code_version(), parent, experiment_id,
          json.dumps(metrics, sort_keys=True), json.dumps(regimes, sort_keys=True) if regimes else None,
          json.dumps(notes) if notes else None),
@@ -68,8 +71,10 @@ def _insert(conn, *, run_id: str, now: str, kind: str, version: str, run: Backte
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rows,
     )
+    invested = (result.positions.sum(axis=1) if isinstance(result, PortfolioResult)
+                else result.shares)  # shares held (summed over instruments for a portfolio)
     series = [[d.strftime("%Y-%m-%d"), float(e), float(c), float(s)]
-              for d, e, c, s in zip(result.equity.index, result.equity, result.cash, result.shares,
+              for d, e, c, s in zip(result.equity.index, result.equity, result.cash, invested,
                                     strict=True)]
     conn.execute("INSERT INTO backtest_equity (run_id, series_json) VALUES (?, ?)",
                  (run_id, json.dumps(series)))
@@ -87,10 +92,11 @@ def save(db: Database, run: BacktestRun, *, kind: str = "backtest",
                 result=run.result, metrics={**run.metrics, "comparison": run.comparison},
                 fingerprint=fingerprint, parent=None, experiment_id=experiment_id,
                 regimes=run.regimes, notes=run.notes + run.data_warnings)
-        if run.benchmark is not None and run.benchmark_spec is not None:
-            bh_version = _ensure_strategy(conn, run.benchmark_spec, now)
-            _insert(conn, run_id=_run_id(now, bh_version, run.symbol, run_id, "benchmark"),
-                    now=now, kind="benchmark", version=bh_version, run=run, result=run.benchmark,
-                    metrics=run.benchmark_metrics or {}, fingerprint=fingerprint, parent=run_id,
-                    experiment_id=experiment_id, regimes=None, notes=None)
+        for b in run.benchmarks:
+            b_version = _ensure_strategy(conn, b.spec, now)
+            _insert(conn, run_id=_run_id(now, b_version, ",".join(b.symbols), run_id, b.name),
+                    now=now, kind="benchmark", version=b_version, run=run, result=b.result,
+                    metrics={**b.metrics, "benchmark": b.name}, fingerprint=fingerprint,
+                    parent=run_id, experiment_id=experiment_id, regimes=None, notes=None,
+                    symbol=",".join(b.symbols), sha=b.series_sha256)
     return run_id

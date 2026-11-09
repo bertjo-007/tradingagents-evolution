@@ -191,7 +191,7 @@ nur mit dem Extra `[dashboard]`.
 | M1 | Snapshot-Store (unveränderlich, gehasht), Ingest mit Corporate Actions, Qualitätsregeln, CLI `ingest`/`verify`/`report` — siehe [DATEN.md](DATEN.md) | erledigt |
 | M2 | Indikatoren, Regime-Klassifikation; Paritäts- und Kausalitätstests — siehe [INDIKATOREN.md](INDIKATOREN.md) | erledigt |
 | M3 | Single-Asset-Engine mit Kosten, Slippage, Stops, Sizing, Kennzahlen; Oracle-, Shift- und Trunkierungstest — siehe [BACKTESTING.md](BACKTESTING.md) | erledigt |
-| M4 | Portfolio-Ebene, Strategie-Bibliothek, Benchmarks | offen |
+| M4 | Portfolio-Ebene, Strategie-Bibliothek, Benchmarks — siehe [STRATEGIEN.md](STRATEGIEN.md) | erledigt |
 | M5 | Walk-Forward (purged/embargoed), Optimierung, Deflated Sharpe, Präregistrierung | offen |
 | M6 | Risiko-Engine, Paper-Broker als dieselbe Engine mit Live-Feed | offen |
 | M7 | Risiko-Tor im Agentengraphen, LLM-Replay-Cache, Token-Budget | offen |

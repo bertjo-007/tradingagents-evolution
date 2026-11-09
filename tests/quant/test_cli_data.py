@@ -108,6 +108,21 @@ def test_backtest_with_stops_and_vol_sizing(run):
     assert "not stored" in result.output
 
 
+def test_backtest_of_several_instruments_shows_every_benchmark(run):
+    from .fixtures import synthetic_bars
+
+    days = _long_spy(run)
+    run.provider.frames["TLT"] = yahoo_frame(days, list(synthetic_bars(600, seed=3)["close"]))
+    assert run("ingest", "--symbols", "SPY,TLT", "--end", days[-1]).exit_code == 0
+    result = run("backtest", "--strategy", "trend_following", "--param", "window=50",
+                 "--symbol", "SPY,TLT", "--no-save")
+    assert result.exit_code == 0, result.output
+    header = next(line for line in result.output.splitlines() if "strategy" in line and "cash" in line)
+    for column in ("buy & hold", "SMA 50/200", "cash"):
+        assert column in header
+    assert "avg exposure" in result.output
+
+
 @pytest.mark.parametrize(
     "args",
     [["--param", "fast=300", "--param", "slow=100"], ["--param", "nonsense"],

@@ -49,6 +49,17 @@ SPECS = [
                  symbols=("X",), sizing=SizingSpec(method="atr_risk", risk_per_trade=0.01),
                  exits=ExitSpec(stop_loss="atr", stop_value=2.5, take_profit="percent",
                                 take_value=0.08, max_holding_bars=40)),
+    StrategySpec(name="cash", rule="cash", symbols=("X",)),
+    StrategySpec(name="trend", rule="trend_following", params={"window": 50}, symbols=("X",)),
+    StrategySpec(name="mom", rule="momentum", params={"lookback": 60, "skip": 5}, symbols=("X",)),
+    StrategySpec(name="meanrev", rule="mean_reversion",
+                 params={"rsi_window": 3, "entry": 25, "exit": 60, "trend_window": 50},
+                 symbols=("X",)),
+    StrategySpec(name="breakout", rule="breakout", params={"entry_window": 20, "exit_window": 10},
+                 symbols=("X",), exits=ExitSpec(stop_loss="atr", stop_value=2.0)),
+    StrategySpec(name="volfilter", rule="volatility_filter",
+                 params={"window": 10, "lookback": 100, "quantile": 0.6}, symbols=("X",)),
+    StrategySpec(name="regime", rule="regime_switch", params={"avoid_high_vol": 1}, symbols=("X",)),
 ]
 
 
@@ -77,7 +88,8 @@ def _truncation_differences(spec, market, cuts=(80, 150, 333, 512, 700, 899)) ->
 @pytest.mark.parametrize("spec", SPECS, ids=lambda s: s.name)
 def test_a_backtest_cut_at_t_decides_and_fills_the_same_up_to_t(spec):
     market = _market()
-    assert simulate_spec(spec, "X", market, CONFIG, market.index, []).fills, "should trade"
+    fills = simulate_spec(spec, "X", market, CONFIG, market.index, []).fills
+    assert bool(fills) == (spec.rule != "cash"), "the test needs trading strategies (cash: none)"
     assert _truncation_differences(spec, market) == []
 
 

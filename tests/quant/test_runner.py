@@ -80,6 +80,54 @@ def test_refusals(store):
         run_backtest(store, SPEC, off, symbol="SPY")
 
 
+def test_the_benchmarks_are_buy_and_hold_index_sma_baseline_and_cash(store):
+    run = run_backtest(store, SPEC, CONFIG, symbol="SPY")
+    # SPY is the index itself, so the index benchmark would only repeat buy and hold.
+    assert [b.name for b in run.benchmarks] == ["buy_and_hold", "sma_baseline", "cash"]
+    cash = next(b for b in run.benchmarks if b.name == "cash")
+    assert cash.metrics["total_return"] == 0.0 and cash.metrics["trades"] == 0
+    bh = run.benchmarks[0].result
+    assert any(f.reason == "dividend_reinvest" for f in bh.fills)  # dividends go back in
+
+
+@pytest.fixture
+def multi_store():
+    db = Database(":memory:")
+    db.migrate()
+    store = SnapshotStore(db)
+    frames = {}
+    for k, sym in enumerate(("SPY", "QQQ", "TLT")):
+        bars = synthetic_bars(700, drift=0.0004 - 0.0002 * k, seed=20 + k)
+        frames[sym] = yahoo_frame(DAYS, list(bars["close"]), dividends={DAYS[200]: 0.3})
+    late = yahoo_frame(DAYS[300:], list(synthetic_bars(400, seed=40)["close"]))
+    frames["NEW"] = late
+    cfg = QuantConfig.model_validate({"universe": {"symbols": list(frames)}})
+    ingest(store, symbols=tuple(frames), start=DAYS[0], end=DAYS[-1],
+           fetch=FakeProvider(frames), source="fixture", source_version="fixture 1",
+           config=cfg, now=datetime(2030, 1, 1, tzinfo=UTC))
+    return store, cfg
+
+
+def test_a_portfolio_backtest_gives_each_instrument_at_most_one_nth(multi_store):
+    store, cfg = multi_store
+    spec = StrategySpec(name="trend", rule="trend_following", params={"window": 50},
+                        symbols=("QQQ", "TLT", "NEW"))
+    run = run_backtest(store, spec, cfg)
+    assert run.symbols == ("QQQ", "TLT", "NEW") and run.symbol == "QQQ,TLT,NEW"
+    weights = run.result.weights
+    assert (weights.max() <= 1 / 3 + 1e-12).all()
+    assert [b.name for b in run.benchmarks] == ["buy_and_hold", "index", "sma_baseline", "cash"]
+    assert any("NEW starts trading" in n for n in run.notes)
+    assert run.metrics["avg_gross_exposure"] <= 1.0
+    assert set(run.regimes)  # split by the market's (calendar symbol's) regime
+    run_id = persist.save(store.db, run)
+    children = store.db.query(
+        "SELECT symbol, json_extract(metrics_json, '$.benchmark') AS name FROM backtest_runs "
+        "WHERE parent_run_id = ? ORDER BY name", (run_id,))
+    assert [tuple(r) for r in children] == [
+        ("QQQ,TLT,NEW", "buy_and_hold"), ("QQQ", "cash"), ("SPY", "index"), ("SPY", "sma_baseline")]
+
+
 def test_a_stored_run_is_traceable_and_append_only(store):
     run = run_backtest(store, SPEC, CONFIG, symbol="SPY")
     run_id = persist.save(store.db, run)
