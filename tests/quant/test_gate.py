@@ -162,6 +162,14 @@ def test_the_node_writes_only_its_own_keys_and_records_the_decision(data_dir):
     assert json.loads(row["sim_order_json"])["side"] == "buy"
     with pytest.raises(sqlite3.DatabaseError, match="append-only"):
         db.execute("UPDATE agent_decisions SET gate_status = 'blocked'")
+    # What the agents wrote is kept, section by section, verbatim and unchangeable.
+    reports = {r["section"]: r["text"] for r in db.query(
+        "SELECT section, text FROM agent_reports WHERE decision_id = ?",
+        (out["risk_verdict"]["decision_id"],))}
+    assert reports == {k: state[k] for k in ("investment_plan", "trader_investment_plan",
+                                             "final_trade_decision")}
+    with pytest.raises(sqlite3.DatabaseError, match="append-only"):
+        db.execute("UPDATE agent_reports SET text = 'x'")
 
 
 def test_recording_without_a_database_is_skipped_quietly(tmp_path):

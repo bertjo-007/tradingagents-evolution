@@ -783,5 +783,52 @@ def regime_command(
         typer.echo(f"{year:<6}" + "".join(f"{shares.get(t, 0):>12.0%}" for t in regime.TRENDS[:-1]))
 
 
+def _loopback(host: str) -> bool:
+    import ipaddress
+
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+@app.command("dashboard")
+def dashboard_command(
+    host: str = typer.Option("127.0.0.1", help="Address to listen on."),
+    port: int = typer.Option(8000, help="Port."),
+    allow_remote: bool = typer.Option(
+        False, "--allow-remote", help="Listen on an address other than loopback. The dashboard "
+                                      "has no login: anyone who reaches it sees everything."),
+) -> None:
+    """Serve the read-only research dashboard (needs the [dashboard] extra)."""
+    if not _loopback(host) and not allow_remote:
+        _fail(ConfigError(f"{host} is not a loopback address and the dashboard has no login; "
+                          "pass --allow-remote to listen there anyway"))
+        return
+    try:
+        import uvicorn
+
+        from tradingagents_quant.api.app import create_app
+    except ImportError:
+        _fail(QuantError('the dashboard needs its extra: pip install -e ".[dashboard]"'))
+        return
+    from tradingagents_quant.store.db import Database
+
+    try:
+        db_file = paths.db_path(paths.data_home())
+        if db_file.is_file():  # the views read the current schema; no file is created here
+            with Database(db_file) as db:
+                db.migrate()
+        web = create_app()
+    except QuantError as exc:
+        _fail(exc)
+        return
+    typer.echo(PAPER_LABEL)
+    typer.echo(f"dashboard: http://{host}:{port}/ (read-only, Ctrl+C stops it)")
+    uvicorn.run(web, host=host, port=port, log_level="warning")
+
+
 if __name__ == "__main__":
     app()

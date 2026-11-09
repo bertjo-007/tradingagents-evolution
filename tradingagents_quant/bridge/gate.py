@@ -302,11 +302,33 @@ def record(state: Mapping[str, Any], result: GateResult, *,
                      json.dumps(result.verdict(), default=str),
                      json.dumps(result.sim_order, default=str),
                      json.dumps(result.data_quality, default=str), fingerprint, code_version()))
+                conn.executemany(
+                    "INSERT INTO agent_reports (decision_id, section, text) VALUES (?, ?, ?)",
+                    [(decision_id, section, text) for section, text in report_sections(state)])
         finally:
             db.close()
         return decision_id
     except Exception:
         return None
+
+
+def report_sections(state: Mapping[str, Any]) -> list[tuple[str, str]]:
+    """What the agents wrote, by section, leaving out what is empty."""
+    debate = state.get("investment_debate_state") or {}
+    risk = state.get("risk_debate_state") or {}
+    sections = [
+        ("market_report", state.get("market_report")),
+        ("sentiment_report", state.get("sentiment_report")),
+        ("news_report", state.get("news_report")),
+        ("fundamentals_report", state.get("fundamentals_report")),
+        ("bull_history", debate.get("bull_history") if isinstance(debate, Mapping) else None),
+        ("bear_history", debate.get("bear_history") if isinstance(debate, Mapping) else None),
+        ("investment_plan", state.get("investment_plan")),
+        ("trader_investment_plan", state.get("trader_investment_plan")),
+        ("risk_debate", risk.get("history") if isinstance(risk, Mapping) else None),
+        ("final_trade_decision", state.get("final_trade_decision")),
+    ]
+    return [(k, str(v)) for k, v in sections if v]
 
 
 def create_risk_gate(environ: Mapping[str, str] | None = None):

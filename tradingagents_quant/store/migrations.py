@@ -350,12 +350,24 @@ CREATE INDEX llm_calls_by_day ON llm_calls(day);
 
 _V5_TRIGGERS = "".join(_append_only(t) for t in ("agent_decisions", "llm_cache", "llm_calls"))
 
+_V6_AGENT_REPORTS = """
+-- What the agents wrote, per decision: the analysts' reports, both sides of the
+-- research debate, the plans, the risk debate and the final decision.
+CREATE TABLE agent_reports (
+    decision_id  TEXT NOT NULL REFERENCES agent_decisions(decision_id),
+    section      TEXT NOT NULL,
+    text         TEXT NOT NULL,
+    PRIMARY KEY (decision_id, section)
+) WITHOUT ROWID;
+""" + _append_only("agent_reports")
+
 MIGRATIONS: tuple[str, ...] = (
     _V1_SNAPSHOTS + _V1_TRIGGERS,
     _V2_BACKTESTS + _V2_TRIGGERS,
     _V3_EXPERIMENTS + _V3_TRIGGERS,
     _V4_PAPER + _V4_TRIGGERS,
     _V5_AGENTS + _V5_TRIGGERS,
+    _V6_AGENT_REPORTS,
 )
 
 SCHEMA_VERSION = len(MIGRATIONS)

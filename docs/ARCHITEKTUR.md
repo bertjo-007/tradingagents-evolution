@@ -110,7 +110,7 @@ tradingagents_quant/
   bridge/     gate.py · consistency.py                M7  einzige Brücke zur Agentenschicht
   loop/       research_loop.py · review.py            M9
   eval/       calibration.py · agents.py
-  api/        app.py · routes.py · static/            M8  nur mit Extra [dashboard]
+  api/        app.py · queries.py · static/           M8  nur mit Extra [dashboard], nur lesend
 tests/quant/                                          erbt tests/conftest.py
 ```
 
@@ -195,7 +195,7 @@ nur mit dem Extra `[dashboard]`.
 | M5 | Walk-Forward (embargoed), robuste Optimierung, Deflated Sharpe, Sharpe-Differenztest, Experiment-Register, Präregistrierung — siehe [VALIDIERUNG.md](VALIDIERUNG.md) | erledigt |
 | M6 | Risiko-Engine, Paper-Trading als dieselbe Engine (Stepper) mit Hash-Ketten-Hauptbuch — siehe [RISIKO.md](RISIKO.md), [PAPER_TRADING.md](PAPER_TRADING.md) | erledigt |
 | M7 | Risiko-Tor im Agentengraphen, LLM-Replay-Cache, Token-Budget — siehe [AGENTEN.md](AGENTEN.md) | erledigt |
-| M8 | API und Dashboard | offen |
+| M8 | Lesende API und Dashboard, `taq dashboard` — siehe [DASHBOARD.md](DASHBOARD.md) | erledigt |
 | M9 | Research-Loop, Evaluation und Kalibrierung, Doku, Windows-CI | offen |
 
 ## 5. Wie ein Vorteil nachgewiesen wird
