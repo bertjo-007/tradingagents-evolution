@@ -51,6 +51,18 @@ taq walkforward --hypothesis docs/hypothesen/H-001.toml
 Das Experiment speichert den SHA-256 der Datei. Eine Hypothese, deren Datei
 nach dem Lauf verändert wurde, ist an einem anderen Hash zu erkennen.
 
+## Stand
+
+| Hypothese | Urteil | Experiment |
+|---|---|---|
+| H-001 Trendfolge SPY | failed_validation (P höhere Sharpe 0,50) | `wf-20261109T114214-738d4613` |
+| H-002 Trendfolge 9 Sektoren | failed_validation (0,47) | `wf-20261109T114233-b12b7001` |
+| H-003 RSI(2) Mean Reversion SPY | failed_validation (0,08) | `wf-20261109T114246-f409ae64` |
+
+Einzelheiten, auch zu zwei Fehlern in der Methode, die beim ersten Lauf von
+H-001 gefunden und vor den weiteren Läufen behoben wurden:
+[../VALIDIERUNG.md](../VALIDIERUNG.md).
+
 ## Mehrfaches Testen
 
 Hypothesen auf denselben Instrumenten und überlappenden Testperioden sehen

@@ -433,7 +433,9 @@ def experiments_command(limit: int = typer.Option(20, help="How many, newest fir
             "SELECT experiment_id, created_at, hypothesis_id, rule, symbols, status, verdict, "
             "json_extract(summary_json, '$.oos.sharpe') AS oos, "
             "json_extract(summary_json, '$.benchmark_oos.sharpe') AS bh, "
-            "json_extract(summary_json, '$.deflated.deflated_sharpe') AS dsr "
+            "json_extract(summary_json, '$.deflated.p_deflated') AS p, "
+            "json_extract(summary_json, '$.deflated.deflated_sharpe') AS old, "
+            "json_extract(summary_json, '$.deflated.test') AS test "
             "FROM experiments ORDER BY created_at DESC LIMIT ?", (limit,))
     except QuantError as exc:
         _fail(exc)
@@ -441,8 +443,16 @@ def experiments_command(limit: int = typer.Option(20, help="How many, newest fir
     if not rows:
         typer.echo("no experiment yet; run `taq walkforward`")
     for r in rows:
-        nums = (f"OOS Sharpe {_fmt(r['oos'], 'num')} vs B&H {_fmt(r['bh'], 'num')}, "
-                f"DSR {_fmt(r['dsr'], 'num')}" if r["status"] == "complete" else "failed")
+        if r["status"] != "complete":
+            nums = "failed"
+        else:
+            # Runs before a7b03f7 used superseded tests (see docs/VALIDIERUNG.md);
+            # they are shown as what they were, not re-labelled.
+            if r["p"] is not None:
+                test = f"P(higher Sharpe) {_fmt(r['p'], 'num')}"
+            else:
+                test = f"superseded test ({r['test'] or 'Sharpe vs zero'}) {_fmt(r['old'], 'num')}"
+            nums = f"OOS Sharpe {_fmt(r['oos'], 'num')} vs B&H {_fmt(r['bh'], 'num')}, {test}"
         typer.echo(f"{r['experiment_id']}  {r['hypothesis_id'] or '-':<6} {r['rule']:<18} "
                    f"{r['symbols'][:30]:<31} {r['verdict'] or r['status']:<18} {nums}")
 

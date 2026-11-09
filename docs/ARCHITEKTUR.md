@@ -192,7 +192,7 @@ nur mit dem Extra `[dashboard]`.
 | M2 | Indikatoren, Regime-Klassifikation; Paritäts- und Kausalitätstests — siehe [INDIKATOREN.md](INDIKATOREN.md) | erledigt |
 | M3 | Single-Asset-Engine mit Kosten, Slippage, Stops, Sizing, Kennzahlen; Oracle-, Shift- und Trunkierungstest — siehe [BACKTESTING.md](BACKTESTING.md) | erledigt |
 | M4 | Portfolio-Ebene, Strategie-Bibliothek, Benchmarks — siehe [STRATEGIEN.md](STRATEGIEN.md) | erledigt |
-| M5 | Walk-Forward (purged/embargoed), Optimierung, Deflated Sharpe, Präregistrierung | offen |
+| M5 | Walk-Forward (embargoed), robuste Optimierung, Deflated Sharpe, Sharpe-Differenztest, Experiment-Register, Präregistrierung — siehe [VALIDIERUNG.md](VALIDIERUNG.md) | erledigt |
 | M6 | Risiko-Engine, Paper-Broker als dieselbe Engine mit Live-Feed | offen |
 | M7 | Risiko-Tor im Agentengraphen, LLM-Replay-Cache, Token-Budget | offen |
 | M8 | API und Dashboard | offen |
