@@ -30,3 +30,19 @@ history_start = "1999-01-01"
 max_stale_days = 10
 # Unter so vielen Bars werden keine annualisierten Kennzahlen ausgewiesen.
 min_annualization_bars = 252
+
+[costs]
+# Kosten einer simulierten Ausführung. Standard: liquider US-ETF über einen
+# Broker mit Gebühr pro Aktie. Bewusst nicht optimistisch.
+commission_per_share = 0.005
+commission_min = 1.0
+commission_max_pct = 0.01
+commission_bps = 0.0
+spread_bps = 2.0          # ganzer Spread; jede Ausführung zahlt die Hälfte
+slippage_bps = 2.0        # zusätzliche ungünstige Bewegung je Ausführung
+fractional_shares = false
+
+[backtest]
+initial_cash = 100000.0   # simuliertes Kapital, kein echtes Geld
+risk_free_rate = 0.0      # jährlich, für Sharpe und Sortino
+rebalance_band = 0.2      # Position erst anpassen, wenn sie um mehr als 20 % vom Ziel abweicht

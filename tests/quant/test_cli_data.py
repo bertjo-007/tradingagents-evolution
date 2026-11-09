@@ -79,6 +79,46 @@ def test_regime_of_a_symbol_not_in_the_snapshot_fails_clearly(run):
     assert result.exit_code == 2 and "not in snapshot" in result.output
 
 
+def _long_spy(run, n=600):
+    from .fixtures import synthetic_bars
+
+    bars = synthetic_bars(n, drift=0.0004, seed=12)
+    days = [d.strftime("%Y-%m-%d") for d in bars.index]
+    run.provider.frames["SPY"] = yahoo_frame(days, list(bars["close"]))
+    assert run("ingest", "--symbols", "SPY", "--end", days[-1]).exit_code == 0
+    return days
+
+
+def test_backtest_prints_strategy_against_buy_and_hold_and_stores_it(run):
+    days = _long_spy(run)
+    result = run("backtest", "--strategy", "sma_cross", "--param", "fast=20", "--param",
+                 "slow=100", "--start", days[150])
+    assert result.exit_code == 0, result.output
+    out = result.output
+    assert "PAPER TRADE — NOT REAL MONEY" in out and "buy & hold" in out
+    assert f"{days[150]}..{days[-1]}" in out and "Survivorship bias" in out
+    assert "stored as bt-" in out
+
+
+def test_backtest_with_stops_and_vol_sizing(run):
+    _long_spy(run)
+    result = run("backtest", "--param", "fast=10", "--param", "slow=50", "--sizing", "vol_target",
+                 "--fraction", "0.8", "--stop", "atr:3", "--take", "percent:0.15", "--no-save")
+    assert result.exit_code == 0, result.output
+    assert "not stored" in result.output
+
+
+@pytest.mark.parametrize(
+    "args",
+    [["--param", "fast=300", "--param", "slow=100"], ["--param", "nonsense"],
+     ["--stop", "trailing:3"], ["--strategy", "magic"], ["--symbol", "QQQ"]],
+)
+def test_backtest_refuses_bad_input(run, args):
+    _long_spy(run)
+    result = run("backtest", *args)
+    assert result.exit_code == 2, result.output
+
+
 def test_report_without_a_snapshot_says_what_to_do(run):
     result = run("report")
     assert result.exit_code == 2

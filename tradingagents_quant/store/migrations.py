@@ -130,6 +130,79 @@ _V1_TRIGGERS = "".join(
     for t in ("snapshot_series", "bars", "corporate_actions", "quality_issues", "ingest_failures")
 )
 
-MIGRATIONS: tuple[str, ...] = (_V1_SNAPSHOTS + _V1_TRIGGERS,)
+_V2_BACKTESTS = """
+-- Every strategy version that produced a stored result, by hash of its spec.
+CREATE TABLE strategy_versions (
+    version_hash  TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    rule          TEXT NOT NULL,
+    spec_json     TEXT NOT NULL,
+    first_seen    TEXT NOT NULL
+);
+
+-- A backtest is traceable to the strategy version, the exact data (snapshot
+-- and series hash), the configuration and the code that produced it.
+CREATE TABLE backtest_runs (
+    run_id              TEXT PRIMARY KEY,
+    created_at          TEXT NOT NULL,
+    kind                TEXT NOT NULL CHECK (kind IN ('backtest', 'benchmark', 'walkforward', 'optimization')),
+    strategy_version    TEXT NOT NULL REFERENCES strategy_versions(version_hash),
+    symbol              TEXT NOT NULL,
+    snapshot_id         TEXT NOT NULL REFERENCES snapshots(snapshot_id),
+    series_sha256       TEXT NOT NULL,
+    start_date          TEXT NOT NULL,
+    end_date            TEXT NOT NULL,
+    config_fingerprint  TEXT REFERENCES config_versions(fingerprint),
+    code_version        TEXT NOT NULL,
+    parent_run_id       TEXT REFERENCES backtest_runs(run_id),
+    experiment_id       TEXT,
+    metrics_json        TEXT NOT NULL,
+    regimes_json        TEXT,
+    notes_json          TEXT
+);
+CREATE INDEX backtest_runs_by_strategy ON backtest_runs(strategy_version, symbol);
+
+CREATE TABLE backtest_trades (
+    run_id        TEXT NOT NULL REFERENCES backtest_runs(run_id),
+    n             INTEGER NOT NULL,
+    entry_date    TEXT NOT NULL,
+    exit_date     TEXT,
+    entry_price   REAL NOT NULL,
+    exit_price    REAL,
+    max_shares    REAL NOT NULL,
+    pnl           REAL NOT NULL,
+    return_pct    REAL NOT NULL,
+    holding_bars  INTEGER NOT NULL,
+    exit_reason   TEXT NOT NULL,
+    entry_regime  TEXT NOT NULL,
+    dividends     REAL NOT NULL,
+    PRIMARY KEY (run_id, n)
+) WITHOUT ROWID;
+
+CREATE TABLE backtest_equity (
+    run_id       TEXT PRIMARY KEY REFERENCES backtest_runs(run_id),
+    series_json  TEXT NOT NULL      -- [[date, equity, cash, shares], ...]
+) WITHOUT ROWID;
+"""
+
+
+def _append_only(table: str) -> str:
+    return f"""
+CREATE TRIGGER {table}_no_update BEFORE UPDATE ON {table}
+BEGIN SELECT RAISE(ABORT, 'results are append-only: {table}'); END;
+CREATE TRIGGER {table}_no_delete BEFORE DELETE ON {table}
+BEGIN SELECT RAISE(ABORT, 'results are append-only: {table}'); END;
+"""
+
+
+_V2_TRIGGERS = "".join(
+    _append_only(t)
+    for t in ("strategy_versions", "backtest_runs", "backtest_trades", "backtest_equity")
+)
+
+MIGRATIONS: tuple[str, ...] = (
+    _V1_SNAPSHOTS + _V1_TRIGGERS,
+    _V2_BACKTESTS + _V2_TRIGGERS,
+)
 
 SCHEMA_VERSION = len(MIGRATIONS)

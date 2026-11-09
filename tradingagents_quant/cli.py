@@ -6,6 +6,7 @@ import json
 import os
 import sys
 from collections import Counter
+from typing import Annotated
 
 import typer
 
@@ -212,6 +213,107 @@ def verify(
         )
     typer.echo(f"drift: {restated} of {len(snap.series)} series restated by the provider since "
                f"{snap.created_at}. The snapshot itself is unchanged.")
+
+
+def _parse_params(items: list[str]) -> dict[str, float | int]:
+    params: dict[str, float | int] = {}
+    for item in items:
+        key, sep, value = item.partition("=")
+        if not sep:
+            raise typer.BadParameter(f"--param expects name=value, got {item!r}")
+        number = float(value)
+        params[key.strip()] = int(number) if number.is_integer() else number
+    return params
+
+
+def _parse_level(text: str) -> tuple[str, float]:
+    if not text:
+        return "none", 0.0
+    kind, sep, value = text.partition(":")
+    if not sep or kind not in ("percent", "atr"):
+        raise typer.BadParameter(f"expected percent:<fraction> or atr:<multiple>, got {text!r}")
+    return kind, float(value)
+
+
+def _fmt(value, kind: str = "pct") -> str:
+    if value is None:
+        return "n/a"
+    if kind == "pct":
+        return f"{value:+.2%}"
+    if kind == "share":
+        return f"{value:.2%}"
+    if kind == "num":
+        return f"{value:.2f}"
+    return f"{value:,.0f}"
+
+
+@app.command("backtest")
+def backtest_command(
+    strategy: str = typer.Option("sma_cross", help="Rule name (see strategy library)."),
+    symbol: str = typer.Option("SPY", help="Instrument in the snapshot."),
+    start: str = typer.Option("", help="First day of the test window (YYYY-MM-DD)."),
+    end: str = typer.Option("", help="Last day of the test window (YYYY-MM-DD)."),
+    param: Annotated[list[str] | None, typer.Option(
+        help="Rule parameter, e.g. --param fast=50 (repeatable).")] = None,
+    sizing: str = typer.Option("fixed_fraction", help="fixed_fraction | vol_target | atr_risk"),
+    fraction: float = typer.Option(1.0, help="Largest weight of equity (0-1)."),
+    stop: str = typer.Option("", help="Stop loss: percent:0.1 or atr:3"),
+    take: str = typer.Option("", help="Take profit: percent:0.2 or atr:6"),
+    max_hold: int = typer.Option(0, help="Exit after this many bars (0: no limit)."),
+    signal_prices: str = typer.Option("total_return", help="total_return | price"),
+    snapshot: str = typer.Option("", help="Snapshot id; default: the latest."),
+    save: bool = typer.Option(True, help="Store the run in the database."),
+) -> None:
+    """Backtest one strategy on one instrument against buy and hold. Simulated, not real money."""
+    from tradingagents_quant.sim import persist
+    from tradingagents_quant.sim.runner import run_backtest
+    from tradingagents_quant.strategy.spec import ExitSpec, SizingSpec, StrategySpec
+
+    try:
+        cfg, db, store = _open()
+        stop_kind, stop_value = _parse_level(stop)
+        take_kind, take_value = _parse_level(take)
+        spec = StrategySpec(
+            name=strategy, rule=strategy, params=_parse_params(param or []), symbols=(symbol,),
+            signal_prices=signal_prices, sizing=SizingSpec(method=sizing, fraction=fraction),
+            exits=ExitSpec(stop_loss=stop_kind, stop_value=stop_value, take_profit=take_kind,
+                           take_value=take_value, max_holding_bars=max_hold or None),
+            benchmark=symbol.upper(),
+        )
+        run = run_backtest(store, spec, cfg, snapshot_id=snapshot or None,
+                           start=start or None, end=end or None)
+        run_id = persist.save(db, run) if save else None
+    except (QuantError, ValueError) as exc:
+        _fail(exc)
+        return
+    s, b = run.metrics, run.benchmark_metrics or {}
+    typer.echo(f"{PAPER_LABEL} — simulated backtest")
+    typer.echo(f"{spec.name} on {run.symbol}, {s['start']}..{s['end']} ({s['bars']} bars), "
+               f"snapshot {run.snapshot_id}, strategy version {spec.version_hash()}")
+    typer.echo(f"{'':<22}{'strategy':>14}{'buy & hold':>14}")
+    rows = [("total return", "total_return", "pct"), ("CAGR", "cagr", "pct"),
+            ("volatility", "volatility", "share"), ("Sharpe", "sharpe", "num"),
+            ("Sortino", "sortino", "num"), ("max drawdown", "max_drawdown", "pct"),
+            ("exposure", "exposure", "share"), ("final equity", "final_equity", "cash"),
+            ("costs", "total_costs", "cash"), ("dividends", "dividends", "cash")]
+    for label, key, kind in rows:
+        typer.echo(f"{label:<22}{_fmt(s.get(key), kind):>14}{_fmt(b.get(key), kind):>14}")
+    typer.echo(f"trades {s['trades']} closed{' + 1 open' if s['open_trade'] else ''}, "
+               f"win rate {_fmt(s['win_rate'])}, profit factor {_fmt(s['profit_factor'], 'num')}, "
+               f"avg holding {_fmt(s['avg_holding_bars'], 'num')} bars, exits {s['exit_reasons']}")
+    if s.get("annualization_note"):
+        typer.echo(f"note: {s['annualization_note']}")
+    invested = {k: v for k, v in run.regimes.items() if v["exposure"]}
+    if invested:
+        typer.echo("by regime (return while invested in it):")
+        for label, r in sorted(invested.items(), key=lambda kv: -kv[1]["bars"])[:8]:
+            typer.echo(f"  {label:<24} {r['share_of_bars']:>6.1%} of bars, exposure "
+                       f"{r['exposure']:>6.1%}, compounded {_fmt(r['compounded_return'])}")
+    for w in run.data_warnings[:5]:
+        typer.secho(f"data warning: {w}", fg=typer.colors.YELLOW)
+    for note in run.notes:
+        typer.echo(f"note: {note}")
+    typer.echo(f"stored as {run_id}" if run_id else "not stored (--no-save)")
 
 
 @app.command("regime")

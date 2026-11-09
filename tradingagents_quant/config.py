@@ -125,10 +125,35 @@ class DataSettings(_Section):
         return value
 
 
+class CostSettings(_Section):
+    """Execution costs of a simulated fill. Defaults: a liquid US ETF through a
+    per-share broker (0.005 USD a share, at least 1 USD, at most 1 % of the
+    trade), plus spread and slippage. Deliberately not optimistic: SPY's real
+    spread is a fraction of a basis point."""
+
+    commission_per_share: float = Field(default=0.005, ge=0)
+    commission_min: float = Field(default=1.0, ge=0)
+    commission_max_pct: float = Field(default=0.01, ge=0, le=0.1)
+    commission_bps: float = Field(default=0.0, ge=0, le=100)  # percentage brokers
+    spread_bps: float = Field(default=2.0, ge=0, le=500)  # full spread; a fill pays half
+    slippage_bps: float = Field(default=2.0, ge=0, le=500)  # adverse move per fill
+    fractional_shares: bool = False
+
+
+class BacktestSettings(_Section):
+    initial_cash: float = Field(default=100_000.0, gt=0)
+    risk_free_rate: float = Field(default=0.0, ge=0, le=0.2)  # annual, for Sharpe/Sortino
+    # A position is resized only when the target differs from it by more than
+    # this fraction; below it, the trade would cost more than it corrects.
+    rebalance_band: float = Field(default=0.2, ge=0, le=1)
+
+
 class QuantConfig(_Section):
     modes: Modes = Modes()
     universe: Universe = Universe()
     data: DataSettings = DataSettings()
+    costs: CostSettings = CostSettings()
+    backtest: BacktestSettings = BacktestSettings()
 
     def to_dict(self) -> dict[str, Any]:
         return self.model_dump(mode="json")
@@ -144,6 +169,8 @@ _SECTIONS: dict[str, type[_Section]] = {
     "modes": Modes,
     "universe": Universe,
     "data": DataSettings,
+    "costs": CostSettings,
+    "backtest": BacktestSettings,
 }
 
 
