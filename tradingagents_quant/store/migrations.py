@@ -200,9 +200,66 @@ _V2_TRIGGERS = "".join(
     for t in ("strategy_versions", "backtest_runs", "backtest_trades", "backtest_equity")
 )
 
+_V3_EXPERIMENTS = """
+-- One walk-forward experiment: a design (rule, grid, windows, criteria),
+-- optionally pre-registered as a hypothesis, and its verdict.
+CREATE TABLE experiments (
+    experiment_id       TEXT PRIMARY KEY,
+    created_at          TEXT NOT NULL,
+    kind                TEXT NOT NULL CHECK (kind IN ('walkforward')),
+    status              TEXT NOT NULL CHECK (status IN ('complete', 'failed')),
+    hypothesis_id       TEXT,
+    hypothesis_sha256   TEXT,
+    rule                TEXT NOT NULL,
+    symbols             TEXT NOT NULL,
+    snapshot_id         TEXT NOT NULL REFERENCES snapshots(snapshot_id),
+    config_fingerprint  TEXT REFERENCES config_versions(fingerprint),
+    code_version        TEXT NOT NULL,
+    design_json         TEXT NOT NULL,
+    summary_json        TEXT,
+    verdict             TEXT CHECK (verdict IN ('validated', 'failed_validation', 'inconclusive')),
+    error               TEXT
+);
+
+-- Every parameter set evaluated on every segment, selected or not: the honest
+-- number of trials is what the deflated Sharpe ratio needs.
+CREATE TABLE experiment_trials (
+    experiment_id     TEXT NOT NULL REFERENCES experiments(experiment_id),
+    trial_n           INTEGER NOT NULL,
+    fold              INTEGER NOT NULL,
+    segment           TEXT NOT NULL CHECK (segment IN ('train', 'validation', 'test', 'benchmark')),
+    strategy_version  TEXT NOT NULL REFERENCES strategy_versions(version_hash),
+    params_json       TEXT NOT NULL,
+    start_date        TEXT NOT NULL,
+    end_date          TEXT NOT NULL,
+    objective         REAL,
+    selected          INTEGER NOT NULL DEFAULT 0,
+    metrics_json      TEXT NOT NULL,
+    PRIMARY KEY (experiment_id, trial_n)
+) WITHOUT ROWID;
+
+-- The out-of-sample periods an experiment looked at. A later experiment on
+-- the same instruments and overlapping periods is told so, and has to say
+-- that it reuses them on purpose.
+CREATE TABLE experiment_test_periods (
+    experiment_id  TEXT NOT NULL REFERENCES experiments(experiment_id),
+    fold           INTEGER NOT NULL,
+    symbols        TEXT NOT NULL,
+    start_date     TEXT NOT NULL,
+    end_date       TEXT NOT NULL,
+    PRIMARY KEY (experiment_id, fold)
+) WITHOUT ROWID;
+CREATE INDEX experiment_test_periods_by_symbols ON experiment_test_periods(symbols);
+"""
+
+_V3_TRIGGERS = "".join(
+    _append_only(t) for t in ("experiments", "experiment_trials", "experiment_test_periods")
+)
+
 MIGRATIONS: tuple[str, ...] = (
     _V1_SNAPSHOTS + _V1_TRIGGERS,
     _V2_BACKTESTS + _V2_TRIGGERS,
+    _V3_EXPERIMENTS + _V3_TRIGGERS,
 )
 
 SCHEMA_VERSION = len(MIGRATIONS)

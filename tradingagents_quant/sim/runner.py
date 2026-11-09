@@ -171,6 +171,78 @@ def _combined_sha(shas: dict[str, str]) -> str:
     return digest.hexdigest()
 
 
+@dataclass
+class Prepared:
+    """Checked market data for a set of instruments, and their calendar."""
+
+    snapshot_id: str
+    symbols: tuple[str, ...]
+    markets: dict[str, pd.DataFrame]
+    shas: dict[str, str]
+    calendar: pd.DatetimeIndex  # trading days, up to the requested end
+    calendar_market: pd.DataFrame | None
+    warnings: list[str]
+    notes: list[str]
+
+    def window(self, start: str | None = None, end: str | None = None) -> pd.DatetimeIndex:
+        days = self.calendar
+        if start:
+            days = days[days >= pd.Timestamp(start)]
+        if end:
+            days = days[days <= pd.Timestamp(end)]
+        if len(self.symbols) == 1 and self.calendar_market is not None:
+            days = self.markets[self.symbols[0]].index.intersection(days)
+        return days
+
+
+def prepare(
+    store: SnapshotStore, snapshot_id: str | None, symbols: tuple[str, ...], config: QuantConfig,
+    *, end: str | None = None,
+) -> Prepared:
+    """Load and check every instrument (a data error refuses the run) and the
+    calendar: the trading days of the calendar symbol."""
+    snap = store.resolve(snapshot_id)
+    markets, warnings, notes, shas = {}, [], [], {}
+    for s in symbols:
+        markets[s], w, n_, shas[s] = load_market(store, snap.snapshot_id, s, end=end)
+        warnings += w
+        notes += n_
+    cal_symbol = config.universe.calendar_symbol
+    try:
+        if cal_symbol in markets:
+            cal_market = markets[cal_symbol]
+        else:
+            cal_market = load_market(store, snap.snapshot_id, cal_symbol, end=end)[0]
+        days = cal_market.index
+    except (SnapshotError, DataError):
+        cal_market = None
+        days = pd.DatetimeIndex(sorted(set().union(*(mk.index for mk in markets.values()))))
+        notes.append(f"calendar symbol {cal_symbol} unavailable; calendar is the union of the "
+                     "instruments' days")
+    return Prepared(snap.snapshot_id, symbols, markets, shas, days, cal_market, warnings, notes)
+
+
+def evaluate(
+    spec: StrategySpec, prepared: Prepared, config: QuantConfig, window: pd.DatetimeIndex, *,
+    buy_and_hold: bool = False, notes: list[str] | None = None,
+) -> Result:
+    """Simulate ``spec`` on ``window`` only. The data handed in ends with the
+    window: a check in depth on top of the rules being causal."""
+    cut = {s: m.loc[: window[-1]] for s, m in prepared.markets.items()}
+    band = NO_BAND if buy_and_hold else None
+    notes = [] if notes is None else notes
+    if len(prepared.symbols) == 1:
+        s = prepared.symbols[0]
+        return simulate_spec(spec, s, cut[s], config, cut[s].index.intersection(window), notes,
+                             rebalance_band=band, reinvest_dividends=buy_and_hold)
+    regime_now = None
+    if prepared.calendar_market is not None:
+        cal = prepared.calendar_market.loc[: window[-1]]
+        regime_now = regime.classify(signal_frame(cal, spec.signal_prices)).reindex(window)
+    return simulate_portfolio_spec(spec, cut, config, window, regime_now, notes,
+                                   rebalance_band=band, reinvest_dividends=buy_and_hold)
+
+
 def run_backtest(
     store: SnapshotStore,
     spec: StrategySpec,
@@ -189,32 +261,11 @@ def run_backtest(
     outside = [s for s in chosen if s not in spec.symbols]
     if outside:
         raise ValueError(f"{', '.join(outside)} is not an instrument of strategy {spec.name}")
-    snap = store.resolve(snapshot_id)
-
-    markets, warnings, notes, shas = {}, [], [], {}
-    for s in chosen:
-        markets[s], w, n_, shas[s] = load_market(store, snap.snapshot_id, s, end=end)
-        warnings += w
-        notes += n_
-
-    # The calendar: the trading days of the calendar symbol inside the window.
-    cal_symbol = config.universe.calendar_symbol
-    try:
-        if cal_symbol in markets:
-            cal_market = markets[cal_symbol]
-        else:
-            cal_market = load_market(store, snap.snapshot_id, cal_symbol, end=end)[0]
-        days = cal_market.index
-    except (SnapshotError, DataError):
-        cal_market = None
-        days = pd.DatetimeIndex(sorted(set().union(*(mk.index for mk in markets.values()))))
-        notes.append(f"calendar symbol {cal_symbol} unavailable; calendar is the union of the "
-                     "instruments' days")
-    window = days[days >= pd.Timestamp(start)] if start else days
-    if end:
-        window = window[window <= pd.Timestamp(end)]
-    if len(chosen) == 1:
-        window = markets[chosen[0]].index.intersection(window) if cal_market is not None else window
+    prep = prepare(store, snapshot_id, chosen, config, end=end)
+    snap = store.get(prep.snapshot_id)
+    markets, warnings, notes, shas = prep.markets, prep.warnings, prep.notes, prep.shas
+    cal_market = prep.calendar_market
+    window = prep.window(start, end)
     if len(window) < 2:
         raise DataError(f"window {start}..{end} holds fewer than two bars of {', '.join(chosen)}")
     for s, mk in markets.items():

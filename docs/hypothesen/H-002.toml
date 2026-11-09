@@ -1,0 +1,22 @@
+[hypothesis]
+id = "H-002"
+statement = "Trendfolge je Sektor (neun SPDR-Sektor-ETFs, je höchstens ein Neuntel des Kapitals) erzielt out-of-sample nach Kosten eine höhere Sharpe-Ratio als dieselben Sektoren gleich gewichtet mit Buy-and-Hold und reinvestierten Dividenden."
+created = "2026-11-09"
+
+[design]
+rule = "trend_following"
+symbols = ["XLB", "XLE", "XLF", "XLI", "XLK", "XLP", "XLU", "XLV", "XLY"]
+grid = { window = [100, 150, 200, 250] }
+start = "2000-01-03"
+train_years = 6
+validation_years = 2
+test_years = 2
+embargo_bars = 21
+objective = "sharpe"
+top_k = 2
+
+[criteria]
+margin_vs_benchmark = 0.0
+min_deflated_sharpe = 0.95
+min_oos_trades = 50
+max_variants = 4

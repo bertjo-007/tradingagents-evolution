@@ -1,0 +1,23 @@
+[hypothesis]
+id = "H-003"
+statement = "Kurzfristige Mean Reversion (Kauf bei RSI(2) unter der Einstiegsschwelle, solange der Schlusskurs über seiner 200-Tage-Linie liegt; Verkauf bei RSI(2) über der Ausstiegsschwelle) erzielt auf SPY out-of-sample nach Kosten eine höhere Sharpe-Ratio als Buy-and-Hold mit reinvestierten Dividenden."
+created = "2026-11-09"
+
+[design]
+rule = "mean_reversion"
+symbols = ["SPY"]
+grid = { entry = [5, 10, 20], exit = [60, 70, 80] }
+fixed_params = { rsi_window = 2, trend_window = 200 }
+start = "2000-01-03"
+train_years = 6
+validation_years = 2
+test_years = 2
+embargo_bars = 21
+objective = "sharpe"
+top_k = 3
+
+[criteria]
+margin_vs_benchmark = 0.0
+min_deflated_sharpe = 0.95
+min_oos_trades = 50
+max_variants = 9

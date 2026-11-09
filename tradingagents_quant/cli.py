@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 from collections import Counter
@@ -322,6 +323,125 @@ def backtest_command(
     for note in run.notes:
         typer.echo(f"note: {note}")
     typer.echo(f"stored as {run_id}" if run_id else "not stored (--no-save)")
+
+
+def _parse_grid(items: list[str]) -> dict[str, list[float | int]]:
+    out: dict[str, list[float | int]] = {}
+    for item in items:
+        key, sep, values = item.partition("=")
+        if not sep or not values:
+            raise typer.BadParameter(f"--grid expects name=v1,v2,..., got {item!r}")
+        numbers = [float(v) for v in values.split(",") if v.strip()]
+        out[key.strip()] = [int(x) if x.is_integer() else x for x in numbers]
+    return out
+
+
+@app.command("walkforward")
+def walkforward_command(
+    hypothesis: str = typer.Option("", help="Pre-registered hypothesis file (TOML)."),
+    strategy: str = typer.Option("trend_following", help="Rule (without --hypothesis)."),
+    symbol: str = typer.Option("SPY", help="Instrument(s), comma-separated."),
+    grid: Annotated[list[str] | None, typer.Option(
+        help="Parameter values to search, e.g. --grid window=100,150,200 (repeatable).")] = None,
+    fixed: Annotated[list[str] | None, typer.Option(
+        help="Parameter held fixed, e.g. --fixed rsi_window=2 (repeatable).")] = None,
+    start: str = typer.Option("", help="First day of the history to use."),
+    end: str = typer.Option("", help="Last day of the history to use."),
+    train_years: float = typer.Option(6.0),
+    validation_years: float = typer.Option(2.0),
+    test_years: float = typer.Option(2.0),
+    embargo: int = typer.Option(21, help="Bars left out between segments."),
+    anchored: bool = typer.Option(False, help="Train from the first bar each time."),
+    objective: str = typer.Option("sharpe", help="sharpe | sortino | cagr | calmar"),
+    top_k: int = typer.Option(3, help="Finalists from training tried on validation."),
+    min_trades: int = typer.Option(15, help="Out-of-sample trades needed for a verdict."),
+    allow_reuse: bool = typer.Option(False, help="Knowingly reuse test periods of earlier "
+                                                 "experiments (counted as trials)."),
+    snapshot: str = typer.Option("", help="Snapshot id; default: the latest."),
+    save: bool = typer.Option(True, help="Record the experiment in the database."),
+) -> None:
+    """Walk-forward validation: optimize on train, choose on validation, judge on test."""
+    from tradingagents_quant.sim.walkforward import (
+        WalkForwardDesign,
+        load_hypothesis,
+        run_walkforward,
+    )
+
+    try:
+        cfg, _, store = _open()
+        hyp = load_hypothesis(hypothesis) if hypothesis else None
+        design = hyp.design if hyp else WalkForwardDesign(
+            rule=strategy, symbols=symbol, grid=_parse_grid(grid or []),
+            fixed_params=_parse_params(fixed or []), start=start or None, end=end or None,
+            train_years=train_years, validation_years=validation_years, test_years=test_years,
+            embargo_bars=embargo, anchored=anchored, objective=objective, top_k=top_k,
+            min_oos_trades=min_trades)
+        report = run_walkforward(store, design, cfg, snapshot_id=snapshot or None,
+                                 allow_reuse=allow_reuse, hypothesis=hyp, save=save)
+    except (QuantError, ValueError) as exc:
+        _fail(exc)
+        return
+    d = report.design
+    typer.echo(f"{PAPER_LABEL} — walk-forward validation")
+    if hyp:
+        typer.echo(f"{hyp.id} (pre-registered {hyp.created}): {hyp.statement}")
+    typer.echo(f"{d.rule} on {','.join(d.symbols)}: {len(report.folds)} folds, train "
+               f"{d.train_years:g}y / validation {d.validation_years:g}y / test {d.test_years:g}y, "
+               f"embargo {d.embargo_bars} bars, objective {d.objective}, "
+               f"{len(d.candidates())} variant(s)")
+    typer.echo(f"{'FOLD':<5}{'TEST PERIOD':<25}{'CHOSEN':<28}{'TRAIN':>7}{'VALID':>7}{'TEST':>7}"
+               f"{'B&H':>7}")
+
+    def sr(x):
+        return "n/a" if x is None or not math.isfinite(x) else f"{x:.2f}"
+
+    for f in report.folds:
+        chosen = ", ".join(f"{k}={v:g}" for k, v in f.chosen.items()) or "(defaults)"
+        start_t, end_t = f.periods["test"]
+        typer.echo(f"{f.n:<5}{start_t + '..' + end_t:<25}{chosen:<28}{sr(f.train_objective):>7}"
+                   f"{sr(f.validation_objective):>7}{sr(f.test.get('sharpe')):>7}"
+                   f"{sr(f.benchmark.get('sharpe')):>7}")
+    o, b = report.oos, report.benchmark_oos
+    typer.echo(f"out of sample, {o.get('years', 0):g} years stitched:{'strategy':>14}{'buy & hold':>14}")
+    for label, key, kind in (("  total return", "total_return", "pct"), ("  CAGR", "cagr", "pct"),
+                             ("  Sharpe", "sharpe", "num"), ("  Sortino", "sortino", "num"),
+                             ("  max drawdown", "max_drawdown", "pct")):
+        typer.echo(f"{label:<36}{_fmt(o.get(key), kind):>14}{_fmt(b.get(key), kind):>14}")
+    dsr = report.deflated
+    typer.echo(f"deflated Sharpe {sr(dsr.get('deflated_sharpe'))} "
+               f"(probability the true Sharpe beats luck over {dsr.get('trials')} trial(s); "
+               f"P(Sharpe > 0) {sr(dsr.get('psr_vs_zero'))})")
+    typer.echo(f"out-of-sample trades: {report.oos_trades}")
+    colour = typer.colors.GREEN if report.verdict == "validated" else typer.colors.YELLOW
+    typer.secho(f"VERDICT: {report.verdict}", fg=colour, bold=True)
+    for reason in report.reasons:
+        typer.echo(f"  - {reason}")
+    for note in report.notes:
+        typer.echo(f"note: {note}")
+    typer.echo(f"recorded as {report.experiment_id}" if report.experiment_id else "not recorded")
+
+
+@app.command("experiments")
+def experiments_command(limit: int = typer.Option(20, help="How many, newest first.")) -> None:
+    """The experiment register: every walk-forward run and its verdict."""
+    try:
+        _, db, _ = _open()
+        rows = db.query(
+            "SELECT experiment_id, created_at, hypothesis_id, rule, symbols, status, verdict, "
+            "json_extract(summary_json, '$.oos.sharpe') AS oos, "
+            "json_extract(summary_json, '$.benchmark_oos.sharpe') AS bh, "
+            "json_extract(summary_json, '$.deflated.deflated_sharpe') AS dsr "
+            "FROM experiments ORDER BY created_at DESC LIMIT ?", (limit,))
+    except QuantError as exc:
+        _fail(exc)
+        return
+    if not rows:
+        typer.echo("no experiment yet; run `taq walkforward`")
+    for r in rows:
+        nums = (f"OOS Sharpe {_fmt(r['oos'], 'num')} vs B&H {_fmt(r['bh'], 'num')}, "
+                f"DSR {_fmt(r['dsr'], 'num')}" if r["status"] == "complete" else "failed")
+        typer.echo(f"{r['experiment_id']}  {r['hypothesis_id'] or '-':<6} {r['rule']:<18} "
+                   f"{r['symbols'][:30]:<31} {r['verdict'] or r['status']:<18} {nums}")
 
 
 @app.command("regime")

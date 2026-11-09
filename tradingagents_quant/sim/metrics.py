@@ -120,6 +120,40 @@ def compute(
     return metrics
 
 
+def from_returns(
+    returns: pd.Series, *, initial_cash: float = 1.0, risk_free_rate: float = 0.0,
+    min_annualization_bars: int = 252,
+) -> dict[str, Any]:
+    """The return figures of a daily return series — for out-of-sample
+    segments stitched together, which have no single simulation behind them."""
+    r = returns.dropna()
+    n = len(r)
+    if n == 0:
+        return {"bars": 0}
+    equity = initial_cash * np.cumprod(1.0 + r.to_numpy())
+    eq = pd.Series(equity, index=r.index)
+    rf_daily = (1.0 + risk_free_rate) ** (1.0 / PERIODS_PER_YEAR) - 1.0
+    excess = r - rf_daily
+    std = float(r.std(ddof=1)) if n > 1 else math.nan
+    downside = float(np.sqrt(np.mean(np.minimum(excess.to_numpy(), 0.0) ** 2)))
+    annualize = n >= min_annualization_bars
+    years = n / PERIODS_PER_YEAR
+    final = float(equity[-1])
+    dd = drawdown(eq, initial_cash)
+    return {
+        "bars": n,
+        "years": _round(years, 4),
+        "total_return": _round(final / initial_cash - 1.0),
+        "cagr": _round((final / initial_cash) ** (1.0 / years) - 1.0) if annualize and final > 0 else None,
+        "volatility": _round(std * math.sqrt(PERIODS_PER_YEAR)) if annualize and std > 0 else None,
+        "sharpe": (_round(float(excess.mean()) / std * math.sqrt(PERIODS_PER_YEAR))
+                   if annualize and std > 0 else None),
+        "sortino": (_round(float(excess.mean()) / downside * math.sqrt(PERIODS_PER_YEAR))
+                    if annualize and downside > 0 else None),
+        "max_drawdown": _round(float(dd.min())),
+    }
+
+
 def compare(strategy: dict[str, Any], benchmark: dict[str, Any]) -> dict[str, Any]:
     """Strategy minus benchmark, for the figures where a difference means something."""
     out: dict[str, Any] = {}

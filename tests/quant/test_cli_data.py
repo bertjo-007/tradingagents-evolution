@@ -134,6 +134,37 @@ def test_backtest_refuses_bad_input(run, args):
     assert result.exit_code == 2, result.output
 
 
+def test_walkforward_records_an_experiment_and_refuses_silent_reuse(run, tmp_path):
+    _long_spy(run, n=2300)
+    args = ["walkforward", "--strategy", "sma_cross", "--grid", "fast=10,20", "--grid",
+            "slow=60,100", "--train-years", "3", "--validation-years", "1", "--test-years", "1",
+            "--min-trades", "0"]
+    first = run(*args)
+    assert first.exit_code == 0, first.output
+    assert "walk-forward validation" in first.output and "VERDICT:" in first.output
+    assert "recorded as wf-" in first.output and "deflated Sharpe" in first.output
+    listing = run("experiments")
+    assert listing.exit_code == 0 and "sma_cross" in listing.output
+    again = run(*args)
+    assert again.exit_code == 2 and "earlier experiment" in again.output
+    assert run(*args, "--allow-reuse").exit_code == 0
+
+    path = tmp_path / "H-X.toml"
+    path.write_text(
+        '[hypothesis]\nid = "H-X"\nstatement = "test"\ncreated = "2026-11-09"\n[design]\n'
+        'rule = "trend_following"\nsymbols = ["SPY"]\ngrid = {window = [50, 100]}\n'
+        'train_years = 3\nvalidation_years = 1\ntest_years = 1\n[criteria]\nmin_oos_trades = 0\n'
+        'max_variants = 2\n', encoding="utf-8")
+    # Another rule, the same SPY test periods: still a second look at them.
+    refused = run("walkforward", "--hypothesis", str(path))
+    assert refused.exit_code == 2 and "earlier experiment" in refused.output
+    hyp = run("walkforward", "--hypothesis", str(path), "--allow-reuse")
+    assert hyp.exit_code == 0, hyp.output
+    assert "H-X (pre-registered 2026-11-09): test" in hyp.output
+    assert "reused from 2 earlier experiment(s)" in hyp.output
+    assert "counts 3 trials" in hyp.output
+
+
 def test_report_without_a_snapshot_says_what_to_do(run):
     result = run("report")
     assert result.exit_code == 2

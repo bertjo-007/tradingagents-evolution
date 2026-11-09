@@ -1,0 +1,22 @@
+[hypothesis]
+id = "H-001"
+statement = "Trendfolge (long, solange der Schlusskurs über seinem gleitenden Durchschnitt liegt) erzielt auf SPY out-of-sample nach Kosten eine höhere Sharpe-Ratio als Buy-and-Hold mit reinvestierten Dividenden."
+created = "2026-11-09"
+
+[design]
+rule = "trend_following"
+symbols = ["SPY"]
+grid = { window = [100, 150, 200, 250] }
+start = "2000-01-03"
+train_years = 6
+validation_years = 2
+test_years = 2
+embargo_bars = 21
+objective = "sharpe"
+top_k = 2
+
+[criteria]
+margin_vs_benchmark = 0.0
+min_deflated_sharpe = 0.95
+min_oos_trades = 15
+max_variants = 4
