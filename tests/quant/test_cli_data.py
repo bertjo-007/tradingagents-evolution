@@ -60,6 +60,25 @@ def test_verify_drift_reports_a_restatement(run):
     assert "1 of 1 series restated" in result.output
 
 
+def test_regime_shows_the_latest_label_and_indicator_values(run):
+    from .fixtures import synthetic_bars
+
+    bars = synthetic_bars(400, drift=0.003, vol=0.006)
+    days = [d.strftime("%Y-%m-%d") for d in bars.index]
+    run.provider.frames["SPY"] = yahoo_frame(days, list(bars["close"]))
+    assert run("ingest", "--symbols", "SPY", "--end", days[-1]).exit_code == 0
+    result = run("regime", "--symbol", "spy")
+    assert result.exit_code == 0, result.output
+    assert f"SPY on {days[-1]}" in result.output and "trend strong_up" in result.output
+    assert "rsi_14" in result.output and "atr_14" in result.output
+
+
+def test_regime_of_a_symbol_not_in_the_snapshot_fails_clearly(run):
+    assert run("ingest", "--symbols", "SPY", "--end", DAYS[-1]).exit_code == 0
+    result = run("regime", "--symbol", "NOPE")
+    assert result.exit_code == 2 and "not in snapshot" in result.output
+
+
 def test_report_without_a_snapshot_says_what_to_do(run):
     result = run("report")
     assert result.exit_code == 2

@@ -54,6 +54,48 @@ def linear_closes(n: int, start: float = 100.0, step: float = 0.5) -> list[float
     return [start + step * i for i in range(n)]
 
 
+def synthetic_bars(
+    n: int, *, seed: int = 7, drift: float = 0.0003, vol: float = 0.012, start: str = "2010-01-04",
+    vol_path: Sequence[float] | None = None, mean_reversion: float | None = None,
+) -> pd.DataFrame:
+    """A synthetic daily OHLCV random walk in the canonical bar layout.
+
+    numpy's legacy RandomState keeps its stream stable across releases (the
+    newer Generator does not promise that), so these numbers never change.
+    ``vol_path`` gives a per-bar volatility instead of the constant ``vol``.
+    ``mean_reversion`` (0 < phi < 1) makes the log price an AR(1) around a
+    fixed level instead of a walk: a range-bound market. A driftless random
+    walk is *not* one — it trends by chance, and a regime classifier rightly
+    says so.
+    """
+    import numpy as np
+
+    rng = np.random.RandomState(seed)
+    sigma = np.asarray(vol_path, dtype=float) if vol_path is not None else np.full(n, vol)
+    shocks = sigma * rng.standard_normal(n)
+    if mean_reversion is None:
+        log_price = np.cumsum(drift + shocks)
+    else:
+        log_price = np.zeros(n)
+        for t in range(1, n):
+            log_price[t] = mean_reversion * log_price[t - 1] + shocks[t]
+    close = 100.0 * np.exp(log_price)
+    # As in real bars, a session opens near the previous close (a small
+    # overnight gap) and its wicks extend the open-close range.
+    previous = np.concatenate([[100.0], close[:-1]])
+    open_ = previous * np.exp(sigma * 0.2 * rng.standard_normal(n))
+    wick = np.abs(sigma * 0.5 * rng.standard_normal((2, n)))
+    high = np.maximum(open_, close) * (1 + wick[0])
+    low = np.minimum(open_, close) * (1 - wick[1])
+    volume = np.round(1e6 * np.exp(0.3 * rng.standard_normal(n)))
+    index = pd.DatetimeIndex(pd.bdate_range(start, periods=n), name="date")
+    return pd.DataFrame(
+        {"open": open_, "high": high, "low": low, "close": close, "adj_close": close,
+         "volume": volume},
+        index=index,
+    )
+
+
 class FakeProvider:
     """A fetcher over fixed frames; a symbol mapped to an exception raises it."""
 

@@ -214,5 +214,36 @@ def verify(
                f"{snap.created_at}. The snapshot itself is unchanged.")
 
 
+@app.command("regime")
+def regime_command(
+    symbol: str = typer.Option("SPY", help="Symbol in the snapshot."),
+    snapshot: str = typer.Option("", help="Snapshot id; default: the latest."),
+    years: int = typer.Option(5, help="How many recent calendar years to break down."),
+) -> None:
+    """Current market regime of a symbol and its regime shares per year."""
+    from tradingagents_quant import regime
+    from tradingagents_quant.indicators import registry
+
+    try:
+        _, _, store = _open()
+        snap = store.resolve(snapshot or None)
+        bars = store.bars(snap.snapshot_id, snap.series_info(symbol.upper()).symbol)
+    except QuantError as exc:
+        _fail(exc)
+        return
+    labels = regime.classify(bars)
+    last = labels.index[-1]
+    typer.echo(f"{symbol.upper()} on {last.date()} (snapshot {snap.snapshot_id}): "
+               f"trend {labels['trend'].iloc[-1]}, volatility {labels['volatility'].iloc[-1]}")
+    shown = [(k, {}) for k, s in registry.REGISTRY.items() if s.shown_to_agents]
+    values = registry.values_at(registry.compute_many(bars, shown), last)
+    typer.echo("  " + ", ".join(f"{k} {v:.4g}" if v is not None else f"{k} n/a"
+                                for k, v in values.items()))
+    typer.echo(f"{'YEAR':<6}" + "".join(f"{t:>12}" for t in regime.TRENDS[:-1]))
+    for year in sorted({d.year for d in labels.index})[-years:]:
+        shares = labels.loc[str(year), "trend"].value_counts(normalize=True)
+        typer.echo(f"{year:<6}" + "".join(f"{shares.get(t, 0):>12.0%}" for t in regime.TRENDS[:-1]))
+
+
 if __name__ == "__main__":
     app()
