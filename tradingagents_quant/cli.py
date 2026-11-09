@@ -457,6 +457,214 @@ def experiments_command(limit: int = typer.Option(20, help="How many, newest fir
                    f"{r['symbols'][:30]:<31} {r['verdict'] or r['status']:<18} {nums}")
 
 
+paper_app = typer.Typer(no_args_is_help=True, help=f"Paper trading. {PAPER_LABEL}.")
+app.add_typer(paper_app, name="paper")
+
+
+def _paper_spec(strategy, symbol, param, sizing, fraction, stop, take, max_hold, signal_prices,
+                benchmark):
+    from tradingagents_quant.strategy.spec import ExitSpec, SizingSpec, StrategySpec
+
+    stop_kind, stop_value = _parse_level(stop)
+    take_kind, take_value = _parse_level(take)
+    return StrategySpec(
+        name=strategy, rule=strategy, params=_parse_params(param or []), symbols=symbol,
+        signal_prices=signal_prices, sizing=SizingSpec(method=sizing, fraction=fraction),
+        exits=ExitSpec(stop_loss=stop_kind, stop_value=stop_value, take_profit=take_kind,
+                       take_value=take_value, max_holding_bars=max_hold or None),
+        benchmark=benchmark)
+
+
+@paper_app.command("open")
+def paper_open(
+    name: str = typer.Option(..., help="A name for the account."),
+    strategy: str = typer.Option("trend_following", help="Rule."),
+    symbol: str = typer.Option("SPY", help="Instrument(s), comma-separated."),
+    param: Annotated[list[str] | None, typer.Option(help="Rule parameter name=value.")] = None,
+    sizing: str = typer.Option("fixed_fraction"),
+    fraction: float = typer.Option(1.0),
+    stop: str = typer.Option("", help="percent:0.1 or atr:3"),
+    take: str = typer.Option("", help="percent:0.2 or atr:6"),
+    max_hold: int = typer.Option(0),
+    signal_prices: str = typer.Option("total_return"),
+    cash: float = typer.Option(0.0, help="Simulated starting cash (default: backtest.initial_cash)."),
+    start: str = typer.Option("", help="First decision day (default: the latest trading day)."),
+) -> None:
+    """Open a paper account for one strategy version."""
+    from tradingagents_quant.paper.account import open_account
+
+    try:
+        cfg, _, store = _open()
+        spec = _paper_spec(strategy, symbol, param, sizing, fraction, stop, take, max_hold,
+                           signal_prices, cfg.universe.benchmark)
+        acc = open_account(store, name=name, spec=spec, config=cfg, initial_cash=cash or None,
+                           start=start or None)
+    except (QuantError, ValueError) as exc:
+        _fail(exc)
+        return
+    typer.echo(f"{PAPER_LABEL}")
+    typer.echo(f"opened {acc.name} ({acc.account_id}): {spec.name} on {','.join(acc.symbols)}, "
+               f"simulated cash {acc.initial_cash:,.0f}, first decision at the close of "
+               f"{acc.start_date}, strategy version {spec.version_hash()}")
+    typer.echo("next: `taq ingest` for fresh data, then `taq paper run`")
+
+
+@paper_app.command("run")
+def paper_run(
+    name: str = typer.Option("", help="One account (default: all)."),
+    until: str = typer.Option("", help="Process up to this day only (default: latest)."),
+) -> None:
+    """Advance accounts over the trading days they have not seen yet."""
+    from tradingagents_quant.paper.account import get_account, list_accounts
+    from tradingagents_quant.paper.runner import run_account
+
+    try:
+        cfg, db, store = _open()
+        accounts = [get_account(db, name)] if name else list_accounts(db)
+        if not accounts:
+            typer.echo("no paper account yet; `taq paper open --name ...`")
+            return
+        runs = [run_account(store, a, cfg, until=until or None) for a in accounts]
+    except (QuantError, ValueError) as exc:
+        _fail(exc)
+        return
+    typer.echo(PAPER_LABEL)
+    for r in runs:
+        span = f"{r.days[0]}..{r.days[-1]} ({len(r.days)} days)" if r.days else "no new day"
+        typer.echo(f"{r.account.name}: {span}, status {r.status}"
+                   + (f", equity {r.equity:,.2f}" if r.days else ""))
+        for f in r.fills:
+            typer.echo(f"  {f['date']} {f['side']:<4} {f['shares']:g} {f['symbol']} at "
+                       f"{f['price']:.4f} ({f['reason']}), fee {f['commission']:.2f}")
+        for x in r.rejections:
+            typer.secho(f"  {x['date']} {x['symbol']}: {x['reason']} — {x['detail']}",
+                        fg=typer.colors.YELLOW)
+        if r.risk_decisions:
+            typer.echo(f"  risk engine: {r.risk_decisions} decision(s), {r.risk_refusals} refused")
+        for note in r.notes:
+            typer.echo(f"  note: {note}")
+
+
+@paper_app.command("status")
+def paper_status(name: str = typer.Option("", help="One account (default: all).")) -> None:
+    """Positions, cash and equity of paper accounts."""
+    from tradingagents_quant.paper.account import get_account, list_accounts
+    from tradingagents_quant.paper.runner import summary
+
+    try:
+        _, db, store = _open()
+        accounts = [get_account(db, name)] if name else list_accounts(db)
+    except QuantError as exc:
+        _fail(exc)
+        return
+    typer.echo(PAPER_LABEL)
+    if not accounts:
+        typer.echo("no paper account yet; `taq paper open --name ...`")
+    for a in accounts:
+        s = summary(store, a)
+        pnl = s["equity"] / a.initial_cash - 1.0
+        peak = s.get("peak_equity") or s["equity"]
+        typer.echo(f"{a.name} [{s['status']}] {a.spec.name} on {','.join(a.symbols)}, as of "
+                   f"{s['as_of'] or '(not run yet)'}")
+        typer.echo(f"  simulated equity {s['equity']:,.2f} ({pnl:+.2%} since start), cash "
+                   f"{s['cash']:,.2f}, drawdown {1 - s['equity'] / peak:.2%}")
+        for sym, p in s["positions"].items():
+            stop = f", stop {p['stop']:.2f}" if p["stop"] else ""
+            typer.echo(f"  {sym:<6} {p['shares']:>10g} sh  close {p['last_close']:.2f}  value "
+                       f"{p['value']:,.0f}  weight {p['weight']:.1%}{stop}")
+        for sym, o in s.get("pending", {}).items():
+            typer.echo(f"  pending: {o['side']} {o['shares']:g} {sym} at the next open ({o['reason']})")
+
+
+@paper_app.command("history")
+def paper_history(name: str = typer.Option(..., help="Account."),
+                  limit: int = typer.Option(30, help="Latest entries.")) -> None:
+    """Fills, refusals and status changes of an account, from its ledger."""
+    from tradingagents_quant.paper import ledger
+    from tradingagents_quant.paper.account import get_account
+
+    try:
+        _, db, _ = _open()
+        acc = get_account(db, name)
+        rows = ledger.entries(db, acc.account_id,
+                              ("opened", "fill", "rejection", "status", "rebase", "dividend"), limit)
+    except QuantError as exc:
+        _fail(exc)
+        return
+    typer.echo(PAPER_LABEL)
+    for e in rows:
+        if e["kind"] == "fill":
+            text = f"{e['side']} {e['shares']:g} {e['symbol']} at {e['price']:.4f} ({e['reason']})"
+        elif e["kind"] == "rejection":
+            text = f"{e['symbol']}: {e['reason']} — {e['detail']}"
+        elif e["kind"] == "dividend":
+            text = f"dividends {e['amount']:,.2f}"
+        elif e["kind"] == "opened":
+            text = f"opened with {e['initial_cash']:,.0f} simulated cash"
+        else:
+            text = json.dumps({k: v for k, v in e.items()
+                               if k not in ("seq", "recorded_at", "kind", "date")})
+        typer.echo(f"{e['seq']:>5} {e['date'] or '':<10} {e['kind']:<9} {text}")
+
+
+@paper_app.command("verify")
+def paper_verify(name: str = typer.Option("", help="One account (default: all).")) -> None:
+    """Check every ledger's hash chain."""
+    from tradingagents_quant.paper import ledger
+    from tradingagents_quant.paper.account import get_account, list_accounts
+
+    try:
+        _, db, _ = _open()
+        accounts = [get_account(db, name)] if name else list_accounts(db)
+    except QuantError as exc:
+        _fail(exc)
+        return
+    broken = False
+    for a in accounts:
+        problems = ledger.verify(db, a.account_id)
+        if problems:
+            broken = True
+            for p in problems:
+                typer.secho(f"{a.name}: {p}", fg=typer.colors.RED)
+        else:
+            typer.echo(f"{a.name}: ledger intact")
+    if broken:
+        raise typer.Exit(code=1)
+
+
+@paper_app.command("resume")
+def paper_resume(name: str = typer.Option(..., help="Account."),
+                 reason: str = typer.Option(..., help="Why it may trade again.")) -> None:
+    """Lift a suspension after a review; the reason goes into the ledger."""
+    from tradingagents_quant.paper.account import get_account
+    from tradingagents_quant.paper.runner import resume
+
+    try:
+        _, db, store = _open()
+        resume(store, get_account(db, name), reason=reason)
+    except QuantError as exc:
+        _fail(exc)
+        return
+    typer.echo(f"{name} resumed: {reason}")
+
+
+@paper_app.command("list")
+def paper_list() -> None:
+    """All paper accounts."""
+    from tradingagents_quant.paper.account import latest_state, list_accounts
+
+    try:
+        _, db, _ = _open()
+        accounts = list_accounts(db)
+    except QuantError as exc:
+        _fail(exc)
+        return
+    for a in accounts:
+        st = latest_state(db, a.account_id)
+        typer.echo(f"{a.name:<20} {a.account_id}  {a.spec.name} on {','.join(a.symbols)}  "
+                   f"{(st or {}).get('status', 'active')}  as of {(st or {}).get('as_of', '-')}")
+
+
 @app.command("regime")
 def regime_command(
     symbol: str = typer.Option("SPY", help="Symbol in the snapshot."),

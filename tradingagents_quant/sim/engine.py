@@ -23,6 +23,13 @@ Portfolio limits: the weights of all instruments together never exceed
 trading day, or a gap) is neither traded nor decided on that day; a position
 in it keeps its last close for valuation, which the notes say.
 
+The loop is a ``Book`` stepped one day at a time. A backtest steps it over
+history; paper trading (``paper/``) steps the same book over each new day and
+stores its state in between — one engine, not two. An optional
+``order_filter`` sees every new buy order before it is placed: the
+deterministic risk engine, which may refuse or shrink it. Orders that reduce
+risk (sells) are never filtered.
+
 Nothing in the loop reads a bar after the current one. ``tests/quant/
 test_engine_leakage.py`` checks that by truncation, by an oracle that is
 allowed to cheat (it must look absurdly good) and by delaying that oracle a
@@ -32,41 +39,82 @@ day (its edge must vanish).
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import asdict, dataclass, field
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from tradingagents_quant.indicators import core
 from tradingagents_quant.sim.execution import CostModel
+from tradingagents_quant.sim.sizing import shares_for
 from tradingagents_quant.sim.types import Fill, PortfolioResult, Rejection, SimulationResult, Trade
 from tradingagents_quant.strategy.spec import ExitSpec
 
 
 @dataclass(frozen=True)
-class _Order:
+class Order:
     side: str
     shares: float
     reason: str
-    decided: int  # calendar index of the decision
+    decided: str  # date of the decision, YYYY-MM-DD
     atr: float  # ATR at the decision, for ATR-based exit levels
+    regime: str = "unknown"  # regime at the decision, recorded on the trade it opens
 
 
+@dataclass(frozen=True)
+class OrderContext:
+    """What the order filter (the risk engine) is shown about a new buy order."""
+
+    date: pd.Timestamp
+    symbol: str
+    order: Order
+    price: float  # close at the decision
+    equity: float
+    cash: float
+    peak_equity: float
+    previous_equity: float
+    holdings: Mapping[str, tuple[float, float]]  # symbol -> (shares, last close)
+    stop: float | None  # where the stop would sit for an entry at this price
+
+
+@dataclass(frozen=True)
+class FilterDecision:
+    shares: float  # what may be ordered: 0 refuses, less than asked shrinks
+    reasons: tuple[str, ...] = ()
+    record: Any = None  # the full verdict, for the audit trail
+
+
+OrderFilter = Callable[[OrderContext], FilterDecision]
+
+
+@dataclass
 class _Position:
-    __slots__ = ("bars_held", "dividend_cash", "last_close", "pending", "shares", "stop",
-                 "stopped_out", "take", "trade")
+    shares: float = 0.0
+    trade: Trade | None = None
+    stop: float | None = None
+    take: float | None = None
+    stopped_out: bool = False
+    bars_held: int = 0
+    last_close: float = math.nan
+    pending: Order | None = None
+    dividend_cash: float = 0.0  # received, not yet reinvested (reinvest_dividends only)
 
-    def __init__(self) -> None:
-        self.shares = 0.0
-        self.trade: Trade | None = None
-        self.stop: float | None = None
-        self.take: float | None = None
-        self.stopped_out = False
-        self.bars_held = 0
-        self.last_close = math.nan
-        self.pending: _Order | None = None
-        self.dividend_cash = 0.0  # received, not yet reinvested (reinvest_dividends only)
+
+@dataclass
+class Bar:
+    """One calendar day across the book's instruments (arrays in symbol order)."""
+
+    has_bar: np.ndarray
+    open: np.ndarray
+    high: np.ndarray
+    low: np.ndarray
+    close: np.ndarray
+    dividend: np.ndarray
+    atr: np.ndarray
+    regime: np.ndarray
+    weight: np.ndarray  # target weight decided at this close (NaN: none)
 
 
 def _levels(exits: ExitSpec, entry: float, atr: float) -> tuple[float | None, float | None]:
@@ -80,6 +128,303 @@ def _levels(exits: ExitSpec, entry: float, atr: float) -> tuple[float | None, fl
     elif exits.take_profit == "atr":
         take = entry + exits.take_value * atr
     return stop, take
+
+
+@dataclass
+class Book:
+    """The state of a simulated account and the rules that move it one day on."""
+
+    symbols: tuple[str, ...]
+    costs: CostModel
+    exits: dict[str, ExitSpec]
+    cash: float
+    rebalance_band: float = 0.2
+    reinvest_dividends: bool = False
+    order_filter: OrderFilter | None = None
+    pos: dict[str, _Position] = field(default_factory=dict)
+    fills: list[Fill] = field(default_factory=list)
+    trades: list[Trade] = field(default_factory=list)
+    rejections: list[Rejection] = field(default_factory=list)
+    filter_records: list[tuple[pd.Timestamp, str, Any]] = field(default_factory=list)
+    dividends: float = 0.0
+    notes: list[str] = field(default_factory=list)
+    carried: set[str] = field(default_factory=set)
+    equity: float = math.nan
+    peak_equity: float = math.nan
+    previous_equity: float = math.nan
+
+    def __post_init__(self) -> None:
+        for s in self.symbols:
+            self.pos.setdefault(s, _Position())
+            self.exits.setdefault(s, ExitSpec())
+        if math.isnan(self.equity):
+            self.equity = self.peak_equity = self.previous_equity = self.cash
+
+    # -- one day -------------------------------------------------------------
+
+    def _fill(self, day: pd.Timestamp, s: str, side: str, qty: float, reference: float,
+              reason: str) -> Fill:
+        price = self.costs.fill_price(side, reference)
+        f = Fill(day, side, qty, reference, price, self.costs.commission(qty, price), reason, s)
+        self.cash += f.cash_flow
+        p = self.pos[s]
+        p.shares += qty if side == "buy" else -qty
+        if p.shares <= 1e-12:
+            p.shares = 0.0
+        self.fills.append(f)
+        return f
+
+    def _close_trade(self, day: pd.Timestamp, s: str, f: Fill, reason: str) -> None:
+        p = self.pos[s]
+        assert p.trade is not None
+        p.trade.exit_date, p.trade.exit_price, p.trade.exit_reason = day, f.price, reason
+        p.trade.holding_bars = p.bars_held
+        self.trades.append(p.trade)
+        p.trade, p.stop, p.take = None, None, None
+
+    def _buy(self, day: pd.Timestamp, s: str, order: Order, open_price: float, price: float,
+             qty: float) -> None:
+        if qty < order.shares:
+            self.rejections.append(Rejection(
+                day, "insufficient_cash" if qty == 0 else "reduced_for_cash",
+                f"wanted {order.shares:g} shares at {price:.4f}, cash pays {qty:g}", s))
+        if qty <= 0:
+            return
+        f = self._fill(day, s, "buy", qty, open_price, order.reason)
+        p = self.pos[s]
+        if order.reason == "dividend_reinvest":
+            p.dividend_cash = max(0.0, p.dividend_cash + f.cash_flow)
+        if p.trade is None:
+            p.trade = Trade(day, f.price, order.regime, symbol=s)
+            p.stop, p.take = _levels(self.exits[s], f.price, order.atr)
+            p.bars_held = 0
+        p.trade.fills.append(f)
+
+    def step(self, day: pd.Timestamp, bar: Bar) -> float:
+        """Advance the book by one calendar day; returns the closing equity."""
+        symbols = self.symbols
+        # 1. Dividends to whoever held at the previous close.
+        for j, s in enumerate(symbols):
+            p = self.pos[s]
+            if bar.has_bar[j] and p.shares > 0 and bar.dividend[j] > 0:
+                amount = p.shares * bar.dividend[j]
+                self.cash += amount
+                self.dividends += amount
+                if self.reinvest_dividends:
+                    p.dividend_cash += amount
+                if p.trade is not None:
+                    p.trade.dividends += amount
+        held_overnight = {s: self.pos[s].shares > 0 for s in symbols}
+
+        # 2. Orders decided at the previous close fill at this open: sells first.
+        buys: list[tuple[str, Order, float, float]] = []
+        for j, s in enumerate(symbols):
+            p = self.pos[s]
+            order, p.pending = p.pending, None
+            if order is None:
+                continue
+            if not bar.has_bar[j]:
+                self.rejections.append(Rejection(day, "no_bar", f"{order.side} not filled", s))
+            elif math.isnan(bar.open[j]):
+                self.rejections.append(Rejection(day, "no_open_price", f"{order.side} not filled",
+                                                 s))
+            elif order.side == "sell":
+                qty = min(order.shares, p.shares)
+                if qty > 0:
+                    f = self._fill(day, s, "sell", qty, bar.open[j], order.reason)
+                    assert p.trade is not None
+                    p.trade.fills.append(f)
+                    if p.shares == 0:
+                        self._close_trade(day, s, f, order.reason)
+            else:
+                buys.append((s, order, bar.open[j], self.costs.fill_price("buy", bar.open[j])))
+        if len(buys) == 1:
+            s, order, open_price, price = buys[0]
+            self._buy(day, s, order, open_price, price,
+                      self.costs.affordable(self.cash, price, order.shares))
+        elif buys:
+            need = sum(q.shares * px + self.costs.commission(q.shares, px) for _, q, _, px in buys)
+            factor = min(1.0, self.cash / need) if need > 0 else 0.0
+            for s, order, open_price, price in buys:
+                self._buy(day, s, order, open_price, price,
+                          self.costs.affordable(self.cash, price, order.shares * factor))
+
+        # 3. Stops and targets during the bar.
+        for j, s in enumerate(symbols):
+            p = self.pos[s]
+            if not bar.has_bar[j] or p.shares <= 0 or (p.stop is None and p.take is None):
+                continue
+            o, h, lo = bar.open[j], bar.high[j], bar.low[j]
+            reference = reason = None
+            if math.isnan(h) or math.isnan(lo):
+                self.notes.append(f"{day.date()} {s}: no high/low, stop and target not checked")
+            elif held_overnight[s] and p.stop is not None and o <= p.stop:
+                reference, reason = o, "stop_loss"  # gapped through the stop
+            elif held_overnight[s] and p.take is not None and o >= p.take:
+                reference, reason = o, "take_profit"  # gapped through the target
+            elif p.stop is not None and lo <= p.stop:
+                reference, reason = p.stop, "stop_loss"  # also when the target was hit
+            elif p.take is not None and h >= p.take:
+                reference, reason = p.take, "take_profit"
+            if reason is not None:
+                f = self._fill(day, s, "sell", p.shares, reference, reason)
+                assert p.trade is not None
+                p.trade.fills.append(f)
+                self._close_trade(day, s, f, reason)
+                p.stopped_out = self.exits[s].reentry == "after_signal_reset"
+
+        # 4. Mark at the close.
+        for j, s in enumerate(symbols):
+            p = self.pos[s]
+            if bar.has_bar[j]:
+                p.last_close = bar.close[j]
+                if p.shares > 0:
+                    p.bars_held += 1
+            elif p.shares > 0:
+                self.carried.add(s)
+        self.previous_equity = self.equity
+        self.equity = self.cash + sum(p.shares * p.last_close for p in self.pos.values()
+                                      if p.shares > 0)
+        self.peak_equity = max(self.peak_equity, self.equity)
+
+        # 5. Decide the orders for the next open.
+        for j, s in enumerate(symbols):
+            if not bar.has_bar[j]:
+                continue
+            p, ex = self.pos[s], self.exits[s]
+            w = 0.0 if math.isnan(bar.weight[j]) else float(bar.weight[j])
+            decided = day.strftime("%Y-%m-%d")
+            atr, regime_now = float(bar.atr[j]), str(bar.regime[j])
+            if p.stopped_out and p.shares == 0:
+                if w <= 0:
+                    p.stopped_out = False  # the signal has reset; the next entry may come
+                w = 0.0
+            if p.shares > 0 and ex.max_holding_bars and p.bars_held >= ex.max_holding_bars:
+                p.pending = Order("sell", p.shares, "time_stop", decided, atr, regime_now)
+                p.stopped_out = ex.reentry == "after_signal_reset"
+            elif w <= 0 and p.shares > 0:
+                p.pending = Order("sell", p.shares, "exit_signal", decided, atr, regime_now)
+            elif w > 0:
+                desired = shares_for(w, self.equity, bar.close[j], self.costs)
+                if p.shares == 0 and desired > 0:
+                    if "atr" in (ex.stop_loss, ex.take_profit) and math.isnan(atr):
+                        # An exit level that cannot be computed is no trade (fail safe).
+                        self.rejections.append(Rejection(day, "stop_not_computable",
+                                                         "ATR not available yet; entry refused", s))
+                    else:
+                        self._place_buy(day, s, Order("buy", desired, "entry", decided, atr,
+                                                      regime_now), bar.close[j])
+                elif p.shares > 0 and abs(desired - p.shares) > self.rebalance_band * p.shares:
+                    if desired > p.shares:
+                        self._place_buy(day, s, Order("buy", desired - p.shares, "rebalance",
+                                                      decided, atr, regime_now), bar.close[j])
+                    else:
+                        p.pending = Order("sell", p.shares - desired, "rebalance", decided, atr,
+                                          regime_now)
+            if (self.reinvest_dividends and p.pending is None and p.shares > 0
+                    and p.dividend_cash > 0):
+                qty = self.costs.round_shares(p.dividend_cash /
+                                              (bar.close[j] * (1.0 + self.costs.adverse)))
+                if qty > 0:
+                    self._place_buy(day, s, Order("buy", qty, "dividend_reinvest", decided, atr,
+                                                  regime_now), bar.close[j])
+        return self.equity
+
+    def _place_buy(self, day: pd.Timestamp, s: str, order: Order, price: float) -> None:
+        """A buy order becomes pending — unless the order filter refuses it."""
+        if self.order_filter is None:
+            self.pos[s].pending = order
+            return
+        p = self.pos[s]
+        stop = None
+        if p.shares == 0:
+            stop = _levels(self.exits[s], price * (1.0 + self.costs.adverse), order.atr)[0]
+        elif p.stop is not None:
+            stop = p.stop
+        holdings = {sym: (q.shares, q.last_close) for sym, q in self.pos.items() if q.shares > 0}
+        decision = self.order_filter(OrderContext(
+            day, s, order, price, self.equity, self.cash, self.peak_equity, self.previous_equity,
+            holdings, stop))
+        self.filter_records.append((day, s, decision.record))
+        allowed = min(order.shares, self.costs.round_shares(decision.shares))
+        if allowed <= 0:
+            self.rejections.append(Rejection(day, "risk_rejected",
+                                             "; ".join(decision.reasons) or "refused", s))
+            return
+        if allowed < order.shares:
+            self.rejections.append(Rejection(
+                day, "risk_reduced",
+                f"{order.shares:g} -> {allowed:g} shares: " + "; ".join(decision.reasons), s))
+            order = Order(order.side, allowed, order.reason, order.decided, order.atr, order.regime)
+        p.pending = order
+
+    def finish(self) -> None:
+        """Mark open trades at the last close (the book stays usable)."""
+        for s in self.symbols:
+            p = self.pos[s]
+            if p.trade is not None:
+                p.trade.holding_bars = p.bars_held
+                p.trade.mark_value = p.shares * p.last_close
+
+    def open_trades(self) -> list[Trade]:
+        return [self.pos[s].trade for s in self.symbols if self.pos[s].trade is not None]
+
+    # -- state ---------------------------------------------------------------
+
+    def state(self) -> dict[str, Any]:
+        """Everything needed to continue tomorrow (closed trades and fills are
+        history and kept elsewhere; the open trade's fills travel with it)."""
+        def fill(f: Fill) -> dict[str, Any]:
+            d = asdict(f)
+            d["date"] = f.date.strftime("%Y-%m-%d")
+            return d
+
+        positions = {}
+        for s, p in self.pos.items():
+            trade = None
+            if p.trade is not None:
+                trade = {**{k: v for k, v in asdict(p.trade).items() if k != "fills"},
+                         "entry_date": p.trade.entry_date.strftime("%Y-%m-%d"),
+                         "exit_date": None, "fills": [fill(f) for f in p.trade.fills]}
+            positions[s] = {
+                "shares": p.shares, "stop": p.stop, "take": p.take, "stopped_out": p.stopped_out,
+                "bars_held": p.bars_held, "last_close": None if math.isnan(p.last_close)
+                else p.last_close, "dividend_cash": p.dividend_cash,
+                "pending": asdict(p.pending) if p.pending else None, "trade": trade,
+            }
+        return {"cash": self.cash, "dividends": self.dividends, "equity": self.equity,
+                "peak_equity": self.peak_equity, "previous_equity": self.previous_equity,
+                "positions": positions, "carried": sorted(self.carried)}
+
+    @classmethod
+    def from_state(cls, state: Mapping[str, Any], *, symbols: tuple[str, ...], costs: CostModel,
+                   exits: dict[str, ExitSpec], rebalance_band: float, reinvest_dividends: bool,
+                   order_filter: OrderFilter | None = None) -> Book:
+        def fill(d: Mapping[str, Any]) -> Fill:
+            return Fill(**{**d, "date": pd.Timestamp(d["date"])})
+
+        book = cls(symbols, costs, dict(exits), float(state["cash"]), rebalance_band,
+                   reinvest_dividends, order_filter, dividends=float(state["dividends"]),
+                   carried=set(state.get("carried", [])), equity=float(state["equity"]),
+                   peak_equity=float(state["peak_equity"]),
+                   previous_equity=float(state["previous_equity"]))
+        for s, d in state["positions"].items():
+            trade = None
+            if d["trade"] is not None:
+                t = dict(d["trade"])
+                t["entry_date"] = pd.Timestamp(t["entry_date"])
+                t["fills"] = [fill(f) for f in t["fills"]]
+                trade = Trade(**t)
+            book.pos[s] = _Position(
+                shares=float(d["shares"]), trade=trade, stop=d["stop"], take=d["take"],
+                stopped_out=bool(d["stopped_out"]), bars_held=int(d["bars_held"]),
+                last_close=math.nan if d["last_close"] is None else float(d["last_close"]),
+                pending=Order(**d["pending"]) if d["pending"] else None,
+                dividend_cash=float(d["dividend_cash"]))
+        return book
+
+
+# -- whole runs ------------------------------------------------------------------
 
 
 def _validated(symbol: str, market: pd.DataFrame, target: pd.Series) -> pd.Series:
@@ -102,6 +447,34 @@ def portfolio_weights(
     return weights.mul(scale, axis=0).clip(upper=max_weight)
 
 
+def bars_for(
+    markets: Mapping[str, pd.DataFrame], symbols: tuple[str, ...], calendar: pd.DatetimeIndex,
+    weights: pd.DataFrame, exits_of: Mapping[str, ExitSpec],
+    regime_of: Mapping[str, pd.DataFrame | None],
+) -> list[Bar]:
+    """The calendar as a list of day records for ``Book.step``."""
+    n, k = len(calendar), len(symbols)
+    has_bar = np.zeros((n, k), dtype=bool)
+    o, h, lo, c, div, atr = (np.full((n, k), math.nan) for _ in range(6))
+    labels = np.full((n, k), "unknown", dtype=object)
+    for j, s in enumerate(symbols):
+        m = markets[s].reindex(calendar)
+        has_bar[:, j] = calendar.isin(markets[s].index)
+        o[:, j], h[:, j], lo[:, j], c[:, j] = (m[col].to_numpy(dtype=float)
+                                               for col in ("open", "high", "low", "close"))
+        div[:, j] = m["dividend"].fillna(0.0).to_numpy() if "dividend" in m else 0.0
+        if "atr" in (exits_of[s].stop_loss, exits_of[s].take_profit):
+            own = markets[s]
+            atr[:, j] = core.atr(own["high"], own["low"], own["close"],
+                                 exits_of[s].atr_window).reindex(calendar).to_numpy()
+        source = regime_of.get(s)
+        if source is not None:
+            labels[:, j] = source["regime"].reindex(calendar).fillna("unknown").to_numpy()
+    W = weights.reindex(index=calendar, columns=list(symbols)).to_numpy()
+    return [Bar(has_bar[i], o[i], h[i], lo[i], c[i], div[i], atr[i], labels[i], W[i])
+            for i in range(n)]
+
+
 def simulate_portfolio(
     markets: Mapping[str, pd.DataFrame],
     targets: Mapping[str, pd.Series],
@@ -117,6 +490,7 @@ def simulate_portfolio(
     entry_regimes: Mapping[str, pd.DataFrame] | None = None,
     notes: list[str] | None = None,
     reinvest_dividends: bool = False,
+    order_filter: OrderFilter | None = None,
 ) -> PortfolioResult:
     """Run instruments that share one cash account. ``markets``: quoted
     ``open high low close`` and ``dividend`` per symbol; ``targets``: weight of
@@ -139,216 +513,40 @@ def simulate_portfolio(
         raise ValueError("no bars to simulate")
     exits_of = {s: (exits.get(s, ExitSpec()) if isinstance(exits, Mapping) else (exits or ExitSpec()))
                 for s in symbols}
-
-    n, k = len(calendar), len(symbols)
     raw = pd.DataFrame({s: _validated(s, markets[s], targets[s]).reindex(calendar) for s in symbols},
                        index=calendar)
     weights = portfolio_weights(raw, max_gross=max_gross, max_weight=max_weight)
-    W = weights.to_numpy()
+    regime_of = {s: (entry_regimes or {}).get(s, regimes) for s in symbols}
+    days = bars_for(markets, symbols, calendar, weights, exits_of, regime_of)
 
-    has_bar = np.zeros((n, k), dtype=bool)
-    o, h, lo, c, div, atr = (np.full((n, k), math.nan) for _ in range(6))
-    labels = np.full((n, k), "unknown", dtype=object)
-    for j, s in enumerate(symbols):
-        m = markets[s].reindex(calendar)
-        has_bar[:, j] = calendar.isin(markets[s].index)
-        o[:, j], h[:, j], lo[:, j], c[:, j] = (m[col].to_numpy(dtype=float)
-                                               for col in ("open", "high", "low", "close"))
-        div[:, j] = m["dividend"].fillna(0.0).to_numpy() if "dividend" in m else 0.0
-        if "atr" in (exits_of[s].stop_loss, exits_of[s].take_profit):
-            own = markets[s]
-            atr[:, j] = core.atr(own["high"], own["low"], own["close"],
-                                 exits_of[s].atr_window).reindex(calendar).to_numpy()
-        source = (entry_regimes or {}).get(s)
-        if source is None and regimes is not None:
-            source = regimes
-        if source is not None:
-            labels[:, j] = source["regime"].reindex(calendar).fillna("unknown").to_numpy()
-
-    notes = list(notes or [])
-    cash = float(initial_cash)
-    pos = {s: _Position() for s in symbols}
-    fills: list[Fill] = []
-    trades: list[Trade] = []
-    rejections: list[Rejection] = []
-    dividends = 0.0
-    eq = np.empty(n)
-    cash_s = np.empty(n)
-    shares_s = np.zeros((n, k))
-    value_s = np.zeros((n, k))
-    carried: set[str] = set()
-
-    def _fill(i: int, s: str, side: str, qty: float, reference: float, reason: str) -> Fill:
-        nonlocal cash
-        price = costs.fill_price(side, reference)
-        f = Fill(calendar[i], side, qty, reference, price, costs.commission(qty, price), reason, s)
-        cash += f.cash_flow
-        p = pos[s]
-        p.shares += qty if side == "buy" else -qty
-        if p.shares <= 1e-12:
-            p.shares = 0.0
-        fills.append(f)
-        return f
-
-    def _close_trade(i: int, s: str, f: Fill, reason: str) -> None:
-        p = pos[s]
-        assert p.trade is not None
-        p.trade.exit_date, p.trade.exit_price, p.trade.exit_reason = calendar[i], f.price, reason
-        p.trade.holding_bars = p.bars_held
-        trades.append(p.trade)
-        p.trade, p.stop, p.take = None, None, None
-
-    def _buy(i: int, j: int, s: str, order: _Order, price: float, qty: float) -> None:
-        if qty < order.shares:
-            rejections.append(Rejection(
-                calendar[i], "insufficient_cash" if qty == 0 else "reduced_for_cash",
-                f"wanted {order.shares:g} shares at {price:.4f}, cash pays {qty:g}", s))
-        if qty <= 0:
-            return
-        f = _fill(i, s, "buy", qty, o[i, j], order.reason)
-        p = pos[s]
-        if order.reason == "dividend_reinvest":
-            p.dividend_cash = max(0.0, p.dividend_cash + f.cash_flow)
-        if p.trade is None:
-            p.trade = Trade(calendar[i], f.price, str(labels[order.decided, j]), symbol=s)
-            p.stop, p.take = _levels(exits_of[s], f.price, order.atr)
-            p.bars_held = 0
-        p.trade.fills.append(f)
-
-    for i in range(n):
-        # 1. Dividends to whoever held at the previous close.
+    book = Book(symbols, costs, dict(exits_of), float(initial_cash), rebalance_band,
+                reinvest_dividends, order_filter, notes=list(notes or []))
+    n, k = len(calendar), len(symbols)
+    eq, cash_s = np.empty(n), np.empty(n)
+    shares_s, value_s = np.zeros((n, k)), np.zeros((n, k))
+    for i, day in enumerate(calendar):
+        eq[i] = book.step(day, days[i])
+        cash_s[i] = book.cash
         for j, s in enumerate(symbols):
-            p = pos[s]
-            if has_bar[i, j] and p.shares > 0 and div[i, j] > 0:
-                amount = p.shares * div[i, j]
-                cash += amount
-                dividends += amount
-                if reinvest_dividends:
-                    p.dividend_cash += amount
-                if p.trade is not None:
-                    p.trade.dividends += amount
-        held_overnight = {s: pos[s].shares > 0 for s in symbols}
-
-        # 2. Orders decided at the previous close fill at this open: sells first.
-        buys: list[tuple[int, str, _Order, float]] = []
-        for j, s in enumerate(symbols):
-            p = pos[s]
-            order, p.pending = p.pending, None
-            if order is None:
-                continue
-            if not has_bar[i, j]:
-                rejections.append(Rejection(calendar[i], "no_bar", f"{order.side} not filled", s))
-            elif math.isnan(o[i, j]):
-                rejections.append(Rejection(calendar[i], "no_open_price", f"{order.side} not filled", s))
-            elif order.side == "sell":
-                qty = min(order.shares, p.shares)
-                if qty > 0:
-                    f = _fill(i, s, "sell", qty, o[i, j], order.reason)
-                    assert p.trade is not None
-                    p.trade.fills.append(f)
-                    if p.shares == 0:
-                        _close_trade(i, s, f, order.reason)
-            else:
-                buys.append((j, s, order, costs.fill_price("buy", o[i, j])))
-        if len(buys) == 1:
-            j, s, order, price = buys[0]
-            _buy(i, j, s, order, price, costs.affordable(cash, price, order.shares))
-        elif buys:
-            need = sum(q.shares * px + costs.commission(q.shares, px) for _, _, q, px in buys)
-            factor = min(1.0, cash / need) if need > 0 else 0.0
-            for j, s, order, price in buys:
-                _buy(i, j, s, order, price, costs.affordable(cash, price, order.shares * factor))
-
-        # 3. Stops and targets during the bar.
-        for j, s in enumerate(symbols):
-            p = pos[s]
-            if not has_bar[i, j] or p.shares <= 0 or (p.stop is None and p.take is None):
-                continue
-            reference = reason = None
-            if math.isnan(h[i, j]) or math.isnan(lo[i, j]):
-                notes.append(f"{calendar[i].date()} {s}: no high/low, stop and target not checked")
-            elif held_overnight[s] and p.stop is not None and o[i, j] <= p.stop:
-                reference, reason = o[i, j], "stop_loss"  # gapped through the stop
-            elif held_overnight[s] and p.take is not None and o[i, j] >= p.take:
-                reference, reason = o[i, j], "take_profit"  # gapped through the target
-            elif p.stop is not None and lo[i, j] <= p.stop:
-                reference, reason = p.stop, "stop_loss"  # also when the target was hit
-            elif p.take is not None and h[i, j] >= p.take:
-                reference, reason = p.take, "take_profit"
-            if reason is not None:
-                f = _fill(i, s, "sell", p.shares, reference, reason)
-                assert p.trade is not None
-                p.trade.fills.append(f)
-                _close_trade(i, s, f, reason)
-                p.stopped_out = exits_of[s].reentry == "after_signal_reset"
-
-        # 4. Mark at the close.
-        for j, s in enumerate(symbols):
-            p = pos[s]
-            if has_bar[i, j]:
-                p.last_close = c[i, j]
-                if p.shares > 0:
-                    p.bars_held += 1
-            elif p.shares > 0:
-                carried.add(s)
+            p = book.pos[s]
             shares_s[i, j] = p.shares
             value_s[i, j] = p.shares * p.last_close if p.shares > 0 else 0.0
-        eq[i] = cash + value_s[i].sum()
-        cash_s[i] = cash
-
-        # 5. Decide the orders for the next open.
-        for j, s in enumerate(symbols):
-            if not has_bar[i, j]:
-                continue
-            p, ex = pos[s], exits_of[s]
-            w = 0.0 if math.isnan(W[i, j]) else float(W[i, j])
-            if p.stopped_out and p.shares == 0:
-                if w <= 0:
-                    p.stopped_out = False  # the signal has reset; the next entry may come
-                w = 0.0
-            if p.shares > 0 and ex.max_holding_bars and p.bars_held >= ex.max_holding_bars:
-                p.pending = _Order("sell", p.shares, "time_stop", i, atr[i, j])
-                p.stopped_out = ex.reentry == "after_signal_reset"
-            elif w <= 0 and p.shares > 0:
-                p.pending = _Order("sell", p.shares, "exit_signal", i, atr[i, j])
-            elif w > 0:
-                desired = costs.round_shares(w * eq[i] / (c[i, j] * (1.0 + costs.adverse)))
-                if p.shares == 0 and desired > 0:
-                    if "atr" in (ex.stop_loss, ex.take_profit) and math.isnan(atr[i, j]):
-                        # An exit level that cannot be computed is no trade (fail safe).
-                        rejections.append(Rejection(calendar[i], "stop_not_computable",
-                                                    "ATR not available yet; entry refused", s))
-                    else:
-                        p.pending = _Order("buy", desired, "entry", i, atr[i, j])
-                elif p.shares > 0 and abs(desired - p.shares) > rebalance_band * p.shares:
-                    side = "buy" if desired > p.shares else "sell"
-                    p.pending = _Order(side, abs(desired - p.shares), "rebalance", i, atr[i, j])
-            if reinvest_dividends and p.pending is None and p.shares > 0 and p.dividend_cash > 0:
-                qty = costs.round_shares(p.dividend_cash / (c[i, j] * (1.0 + costs.adverse)))
-                if qty > 0:
-                    p.pending = _Order("buy", qty, "dividend_reinvest", i, atr[i, j])
-
-    for s in symbols:
-        p = pos[s]
-        if p.trade is not None:
-            p.trade.holding_bars = p.bars_held
-            p.trade.mark_value = p.shares * p.last_close
-            trades.append(p.trade)
-    for s in sorted(carried):
-        notes.append(f"{s} had calendar days without a bar while held; valued at its last close")
+    book.finish()
+    for s in sorted(book.carried):
+        book.notes.append(f"{s} had calendar days without a bar while held; valued at its last close")
 
     return PortfolioResult(
-        fills=fills,
+        fills=book.fills,
         symbols=symbols,
         equity=pd.Series(eq, index=calendar, name="equity"),
         cash=pd.Series(cash_s, index=calendar, name="cash"),
         positions=pd.DataFrame(shares_s, index=calendar, columns=list(symbols)),
         market_value=pd.DataFrame(value_s, index=calendar, columns=list(symbols)),
         weights=weights.fillna(0.0),
-        trades=trades,
-        rejections=rejections,
-        dividends=dividends,
-        notes=notes,
+        trades=book.trades + book.open_trades(),
+        rejections=book.rejections,
+        dividends=book.dividends,
+        notes=book.notes,
         regimes=regimes.reindex(calendar) if regimes is not None else None,
     )
 
@@ -365,6 +563,7 @@ def simulate(
     regimes: pd.DataFrame | None = None,
     notes: list[str] | None = None,
     reinvest_dividends: bool = False,
+    order_filter: OrderFilter | None = None,
 ) -> SimulationResult:
     """One instrument: the portfolio loop with a single member."""
     if len(market) == 0:
@@ -373,6 +572,6 @@ def simulate(
     result = simulate_portfolio(
         {symbol: market}, {symbol: target}, costs=costs, initial_cash=initial_cash, exits=exits,
         rebalance_band=rebalance_band, calendar=market.index, regimes=regimes, notes=notes,
-        reinvest_dividends=reinvest_dividends,
+        reinvest_dividends=reinvest_dividends, order_filter=order_filter,
     )
     return result.single(symbol, target=weights)

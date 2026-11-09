@@ -256,10 +256,57 @@ _V3_TRIGGERS = "".join(
     _append_only(t) for t in ("experiments", "experiment_trials", "experiment_test_periods")
 )
 
+_V4_PAPER = """
+-- A paper-trading account: one strategy version, simulated cash. Nothing in
+-- here is or represents real money.
+CREATE TABLE paper_accounts (
+    account_id          TEXT PRIMARY KEY,
+    name                TEXT NOT NULL UNIQUE,
+    created_at          TEXT NOT NULL,
+    strategy_version    TEXT NOT NULL REFERENCES strategy_versions(version_hash),
+    symbols             TEXT NOT NULL,
+    initial_cash        REAL NOT NULL,
+    start_date          TEXT NOT NULL,
+    config_fingerprint  TEXT REFERENCES config_versions(fingerprint),
+    label               TEXT NOT NULL
+);
+
+-- Everything that happens to an account, in order, each entry chained to the
+-- one before by its hash: an entry changed or removed later breaks the chain.
+CREATE TABLE paper_ledger (
+    account_id    TEXT NOT NULL REFERENCES paper_accounts(account_id),
+    seq           INTEGER NOT NULL,
+    recorded_at   TEXT NOT NULL,
+    kind          TEXT NOT NULL CHECK (kind IN ('opened', 'fill', 'rejection', 'risk', 'day',
+                                                'dividend', 'status', 'rebase', 'note')),
+    date          TEXT,
+    payload_json  TEXT NOT NULL,
+    prev_hash     TEXT NOT NULL,
+    hash          TEXT NOT NULL,
+    PRIMARY KEY (account_id, seq)
+) WITHOUT ROWID;
+
+-- The account's state after each run, to continue from. Every one is kept.
+CREATE TABLE paper_states (
+    account_id   TEXT NOT NULL REFERENCES paper_accounts(account_id),
+    run_at       TEXT NOT NULL,
+    as_of        TEXT NOT NULL,
+    snapshot_id  TEXT NOT NULL REFERENCES snapshots(snapshot_id),
+    status       TEXT NOT NULL CHECK (status IN ('active', 'suspended', 'halted')),
+    ledger_seq   INTEGER NOT NULL,
+    ledger_hash  TEXT NOT NULL,
+    state_json   TEXT NOT NULL,
+    PRIMARY KEY (account_id, run_at)
+) WITHOUT ROWID;
+"""
+
+_V4_TRIGGERS = "".join(_append_only(t) for t in ("paper_accounts", "paper_ledger", "paper_states"))
+
 MIGRATIONS: tuple[str, ...] = (
     _V1_SNAPSHOTS + _V1_TRIGGERS,
     _V2_BACKTESTS + _V2_TRIGGERS,
     _V3_EXPERIMENTS + _V3_TRIGGERS,
+    _V4_PAPER + _V4_TRIGGERS,
 )
 
 SCHEMA_VERSION = len(MIGRATIONS)

@@ -11,7 +11,16 @@ import numpy as np
 import pandas as pd
 
 from tradingagents_quant.indicators import core
+from tradingagents_quant.sim.execution import CostModel
 from tradingagents_quant.strategy.spec import SizingSpec
+
+
+def shares_for(weight: float, equity: float, price: float, costs: CostModel) -> float:
+    """Shares that make ``weight`` of ``equity`` at ``price``, allowing for the
+    adverse fill. The one formula the engine and the risk engine both use."""
+    if weight <= 0 or equity <= 0 or not price > 0:
+        return 0.0
+    return costs.round_shares(weight * equity / (price * (1.0 + costs.adverse)))
 
 
 def target_weights(signal: pd.Series, market: pd.DataFrame, sizing: SizingSpec) -> pd.Series:

@@ -481,8 +481,12 @@ def _run(prep: Prepared, design: WalkForwardDesign, config: QuantConfig, folds: 
 
 
 def _experiment_id(now: str, design: WalkForwardDesign) -> str:
+    """``wf-<second>-<design>-<instant>``: the design part groups repeats of the
+    same design; the last part (from the microseconds) keeps two runs within
+    one second apart."""
     stamp = now.replace("-", "").replace(":", "").split(".")[0]
-    return f"wf-{stamp}-{design.fingerprint()[:8]}"
+    instant = hashlib.sha256(now.encode()).hexdigest()[:4]
+    return f"wf-{stamp}-{design.fingerprint()[:8]}-{instant}"
 
 
 def _design_json(design: WalkForwardDesign, hypothesis: Hypothesis | None) -> str:

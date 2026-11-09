@@ -140,19 +140,33 @@ def simulate_spec(
     )
 
 
+def portfolio_targets(
+    spec: StrategySpec, markets: dict[str, pd.DataFrame]
+) -> tuple[dict[str, pd.Series], dict[str, pd.DataFrame]]:
+    """Each instrument's target weight (its own signal and sizing, divided by
+    the number of instruments) and regime labels, over its full history. The
+    one place this is computed, for backtests and paper trading alike."""
+    n = len(markets)
+    targets, labels = {}, {}
+    for symbol, market in markets.items():
+        target, regimes = _targets(spec, market)
+        targets[symbol] = target / n
+        labels[symbol] = regimes
+    return targets, labels
+
+
 def simulate_portfolio_spec(
     spec: StrategySpec, markets: dict[str, pd.DataFrame], config: QuantConfig,
     calendar: pd.DatetimeIndex, market_regime: pd.DataFrame | None, notes: list[str], *,
     rebalance_band: float | None = None, reinvest_dividends: bool = False,
 ) -> PortfolioResult:
-    n = len(markets)
+    all_targets, all_labels = portfolio_targets(spec, markets)
     targets, inside, entry_regimes = {}, {}, {}
     for symbol, market in markets.items():
-        target, labels = _targets(spec, market)
         days = market.index[market.index.isin(calendar)]
         inside[symbol] = market.loc[days]
-        targets[symbol] = target.loc[days] / n
-        entry_regimes[symbol] = labels.loc[days]
+        targets[symbol] = all_targets[symbol].loc[days]
+        entry_regimes[symbol] = all_labels[symbol].loc[days]
     return simulate_portfolio(
         inside, targets, costs=CostModel.from_settings(config.costs),
         initial_cash=config.backtest.initial_cash, exits=spec.exits,

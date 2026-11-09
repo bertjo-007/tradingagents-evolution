@@ -148,12 +148,36 @@ class BacktestSettings(_Section):
     rebalance_band: float = Field(default=0.2, ge=0, le=1)
 
 
+class RiskSettings(_Section):
+    """Limits the deterministic risk engine enforces on every simulated order.
+
+    Read from the configuration only. Nothing at run time — no strategy, no
+    research loop, no agent — can change them; changing them means changing
+    the configuration, which changes its fingerprint and is recorded.
+    """
+
+    max_gross_exposure: float = Field(default=1.0, gt=0, le=1.0)  # all positions / equity
+    max_position_weight: float = Field(default=0.35, gt=0, le=1.0)  # one position / equity
+    max_open_positions: int = Field(default=20, ge=1)
+    max_drawdown: float = Field(default=0.25, gt=0, le=1.0)  # from the peak: no new entries
+    max_daily_loss: float = Field(default=0.04, gt=0, le=1.0)  # day's loss: no new entries next day
+    max_volatility: float = Field(default=0.80, gt=0)  # annualized, 20 bars, of the instrument
+    min_dollar_volume: float = Field(default=5_000_000.0, ge=0)  # 20-bar average traded value
+    max_adv_fraction: float = Field(default=0.01, gt=0, le=1.0)  # order / average daily value
+    max_correlated_weight: float = Field(default=0.70, gt=0, le=1.0)
+    correlation_threshold: float = Field(default=0.90, gt=0, le=1.0)  # 60-bar return correlation
+    correlation_window: int = Field(default=60, ge=20, le=504)
+    require_stop: bool = False  # True: an entry without a stop level is refused
+    max_risk_per_trade: float = Field(default=0.02, gt=0, le=1.0)  # loss at the stop / equity
+
+
 class QuantConfig(_Section):
     modes: Modes = Modes()
     universe: Universe = Universe()
     data: DataSettings = DataSettings()
     costs: CostSettings = CostSettings()
     backtest: BacktestSettings = BacktestSettings()
+    risk: RiskSettings = RiskSettings()
 
     def to_dict(self) -> dict[str, Any]:
         return self.model_dump(mode="json")
@@ -171,6 +195,7 @@ _SECTIONS: dict[str, type[_Section]] = {
     "data": DataSettings,
     "costs": CostSettings,
     "backtest": BacktestSettings,
+    "risk": RiskSettings,
 }
 
 

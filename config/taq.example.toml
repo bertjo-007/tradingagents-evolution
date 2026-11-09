@@ -46,3 +46,21 @@ fractional_shares = false
 initial_cash = 100000.0   # simuliertes Kapital, kein echtes Geld
 risk_free_rate = 0.0      # jährlich, für Sharpe und Sortino
 rebalance_band = 0.2      # Position erst anpassen, wenn sie um mehr als 20 % vom Ziel abweicht
+
+[risk]
+# Grenzen der deterministischen Risiko-Engine für jede simulierte Order.
+# Nur hier änderbar — kein Lauf, keine Strategie, kein Agent kann sie
+# zur Laufzeit verschieben.
+max_gross_exposure = 1.0         # alle Positionen zusammen / Kapital
+max_position_weight = 0.35       # eine Position / Kapital
+max_open_positions = 20
+max_drawdown = 0.25              # ab diesem Rückgang vom Höchststand keine neuen Einstiege
+max_daily_loss = 0.04            # nach einem solchen Tagesverlust am nächsten Tag keine Einstiege
+max_volatility = 0.80            # annualisierte 20-Tage-Volatilität des Instruments
+min_dollar_volume = 5000000.0    # durchschnittlicher Tagesumsatz (20 Tage) in USD
+max_adv_fraction = 0.01          # Order höchstens 1 % des durchschnittlichen Tagesumsatzes
+max_correlated_weight = 0.70     # Gewicht stark korrelierter Positionen zusammen
+correlation_threshold = 0.90     # ab dieser 60-Tage-Korrelation gelten Positionen als korreliert
+correlation_window = 60
+require_stop = false             # true: Einstieg ohne Stop wird abgewiesen
+max_risk_per_trade = 0.02        # Verlust bis zum Stop / Kapital

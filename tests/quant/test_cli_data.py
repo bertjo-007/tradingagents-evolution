@@ -165,6 +165,26 @@ def test_walkforward_records_an_experiment_and_refuses_silent_reuse(run, tmp_pat
     assert "counts 3 trials" in hyp.output
 
 
+def test_paper_trading_from_the_command_line(run):
+    days = _long_spy(run, n=600)
+    opened = run("paper", "open", "--name", "demo", "--strategy", "trend_following",
+                 "--param", "window=30", "--start", days[300], "--cash", "50000")
+    assert opened.exit_code == 0, opened.output
+    assert "PAPER TRADE — NOT REAL MONEY" in opened.output and "50,000" in opened.output
+    first = run("paper", "run")
+    assert first.exit_code == 0, first.output
+    assert f"demo: {days[300]}..{days[-1]}" in first.output and "buy" in first.output
+    status = run("paper", "status", "--name", "demo")
+    assert status.exit_code == 0 and "simulated equity" in status.output
+    history = run("paper", "history", "--name", "demo", "--limit", "5000")
+    assert history.exit_code == 0 and "opened with 50,000 simulated cash" in history.output
+    assert run("paper", "verify").output.strip() == "demo: ledger intact"
+    assert "demo" in run("paper", "list").output
+    assert "no new day" in run("paper", "run").output
+    assert run("paper", "open", "--name", "demo").exit_code == 2  # the name is taken
+    assert run("paper", "resume", "--name", "demo", "--reason", "x").exit_code == 2  # not suspended
+
+
 def test_report_without_a_snapshot_says_what_to_do(run):
     result = run("report")
     assert result.exit_code == 2

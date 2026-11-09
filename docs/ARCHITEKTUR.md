@@ -105,8 +105,8 @@ tradingagents_quant/
   strategy/   spec.py · library.py                    M3/M4
   sim/        events · execution · position · engine · metrics
               portfolio · benchmark · walkforward · optimize · deflate
-  risk/       engine.py · limits.py                   M6
-  paper/      feed.py · runner.py
+  risk/       engine.py                               M6  Grenzen in config.RiskSettings
+  paper/      ledger · account · runner                   Hauptbuch mit Hash-Kette
   bridge/     gate.py · consistency.py                M7  einzige Brücke zur Agentenschicht
   loop/       research_loop.py · review.py            M9
   eval/       calibration.py · agents.py
@@ -193,7 +193,7 @@ nur mit dem Extra `[dashboard]`.
 | M3 | Single-Asset-Engine mit Kosten, Slippage, Stops, Sizing, Kennzahlen; Oracle-, Shift- und Trunkierungstest — siehe [BACKTESTING.md](BACKTESTING.md) | erledigt |
 | M4 | Portfolio-Ebene, Strategie-Bibliothek, Benchmarks — siehe [STRATEGIEN.md](STRATEGIEN.md) | erledigt |
 | M5 | Walk-Forward (embargoed), robuste Optimierung, Deflated Sharpe, Sharpe-Differenztest, Experiment-Register, Präregistrierung — siehe [VALIDIERUNG.md](VALIDIERUNG.md) | erledigt |
-| M6 | Risiko-Engine, Paper-Broker als dieselbe Engine mit Live-Feed | offen |
+| M6 | Risiko-Engine, Paper-Trading als dieselbe Engine (Stepper) mit Hash-Ketten-Hauptbuch — siehe [RISIKO.md](RISIKO.md), [PAPER_TRADING.md](PAPER_TRADING.md) | erledigt |
 | M7 | Risiko-Tor im Agentengraphen, LLM-Replay-Cache, Token-Budget | offen |
 | M8 | API und Dashboard | offen |
 | M9 | Research-Loop, Evaluation und Kalibrierung, Doku, Windows-CI | offen |
