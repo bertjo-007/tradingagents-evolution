@@ -142,7 +142,7 @@ def test_walkforward_records_an_experiment_and_refuses_silent_reuse(run, tmp_pat
     first = run(*args)
     assert first.exit_code == 0, first.output
     assert "walk-forward validation" in first.output and "VERDICT:" in first.output
-    assert "recorded as wf-" in first.output and "deflated Sharpe" in first.output
+    assert "recorded as wf-" in first.output and "edge over buy & hold" in first.output
     listing = run("experiments")
     assert listing.exit_code == 0 and "sma_cross" in listing.output
     again = run(*args)

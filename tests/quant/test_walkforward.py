@@ -154,6 +154,21 @@ def test_an_overfitted_search_on_noise_is_not_validated():
     assert report.reasons
 
 
+def test_buy_and_hold_can_never_validate_against_itself():
+    """Found on the first real run (H-001, 2026-11-09): a Sharpe ratio a hair
+    above buy and hold's, and a deflated Sharpe that tested against zero —
+    which buy and hold itself passes — made a strategy without an edge
+    'validated'. The test is on the difference now; this must stay so."""
+    design = WalkForwardDesign(rule="buy_and_hold", symbols=("SPY",), train_years=3,
+                               validation_years=1, test_years=1, embargo_bars=10,
+                               min_oos_trades=0)
+    report = run_walkforward(_store(), design, CONFIG, save=False)
+    assert report.verdict != "validated"
+    assert report.deflated["test"] == "active return vs buy and hold"
+    assert report.deflated["psr_vs_zero"] > 0.95  # the old test would have passed it
+    assert any("buy and hold" in r for r in report.reasons)
+
+
 def test_the_register_stores_every_trial_and_refuses_silent_reuse():
     store = _store()
     first = run_walkforward(store, DESIGN, CONFIG)

@@ -289,10 +289,16 @@ def decide(design: WalkForwardDesign, oos: dict[str, Any], bench: dict[str, Any]
     if sharpe <= bench_sharpe + design.margin_vs_benchmark:
         reasons.append(f"out-of-sample Sharpe {sharpe:.2f} does not exceed buy and hold's "
                        f"{bench_sharpe:.2f} by the required {design.margin_vs_benchmark:.2f}")
+    # The claim is "better than buy and hold", so the test is on the difference:
+    # the daily active return (strategy minus buy and hold), deflated for the
+    # number of looks at these test periods. A Sharpe above zero proves nothing
+    # here — buy and hold itself has one.
     dsr = deflated.get("deflated_sharpe")
-    if dsr is None or not math.isfinite(dsr) or dsr < design.min_deflated_sharpe:
-        reasons.append(f"deflated Sharpe {dsr if dsr is not None else float('nan'):.3f} below "
-                       f"{design.min_deflated_sharpe:.2f}")
+    if dsr is None or not math.isfinite(dsr):
+        reasons.append("no measurable difference to buy and hold (active returns are flat)")
+    elif dsr < design.min_deflated_sharpe:
+        reasons.append(f"edge over buy and hold not significant: deflated information ratio "
+                       f"{dsr:.3f}, below {design.min_deflated_sharpe:.2f}")
     finite = [s for s in train_sharpes if math.isfinite(s)]
     if finite:
         in_sample = sum(finite) / len(finite)
@@ -439,10 +445,20 @@ def _run(prep: Prepared, design: WalkForwardDesign, config: QuantConfig, folds: 
                                    min_annualization_bars=config.data.min_annualization_bars)
     # Each earlier look at these test periods was one more selection on them.
     n_trials = 1 + len(reused)
+    # The edge: the daily difference to buy and hold on the same days. Its
+    # deflated Sharpe (a deflated information ratio) is what the verdict uses.
+    active = (oos - bench.reindex(oos.index)).dropna()
     try:
-        deflated = deflated_sharpe(oos.to_numpy(), n_trials=n_trials)
+        deflated = deflated_sharpe(active.to_numpy(), n_trials=n_trials)
     except ValueError as exc:
         deflated = {"deflated_sharpe": None, "error": str(exc), "trials": n_trials}
+    deflated["test"] = "active return vs buy and hold"
+    try:
+        absolute = deflated_sharpe(oos.to_numpy(), n_trials=n_trials)
+        deflated["psr_vs_zero"] = absolute["psr_vs_zero"]
+        deflated["strategy_sharpe_annualized"] = absolute["sharpe_annualized"]
+    except ValueError:
+        deflated["psr_vs_zero"] = None
     verdict, reasons = decide(design, oos_metrics, bench_metrics, deflated, oos_trades,
                               train_sharpes)
     notes = []
