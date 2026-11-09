@@ -103,8 +103,8 @@ tradingagents_quant/
   indicators/ core.py · registry.py                   M2
   regime.py
   strategy/   spec.py · library.py                    M3/M4
-  sim/        events · execution · position · engine · metrics
-              portfolio · benchmark · walkforward · optimize · deflate
+  sim/        engine (Book) · execution · sizing · prices · metrics · types
+              runner · persist · walkforward · optimize · deflate
   risk/       engine.py                               M6  Grenzen in config.RiskSettings
   paper/      ledger · account · runner                   Hauptbuch mit Hash-Kette
   bridge/     gate.py · consistency.py                M7  einzige Brücke zur Agentenschicht
