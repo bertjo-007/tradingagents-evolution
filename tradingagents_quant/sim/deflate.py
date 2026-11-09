@@ -68,6 +68,57 @@ def expected_max_sharpe(n_trials: int, sharpe_variance: float) -> float:
     )
 
 
+def sharpe_difference(
+    returns_a: Sequence[float], returns_b: Sequence[float], *, n_trials: int = 1
+) -> dict[str, float | None]:
+    """Is the Sharpe ratio of ``a`` higher than that of ``b``, measured on the
+    same days? The Jobson-Korkie test with Memmel's (2003) correction, for two
+    correlated return series:
+
+        theta = (2 (1 - rho) + (SR_a^2 + SR_b^2 - 2 SR_a SR_b rho^2) / 2) / T
+        z     = (SR_a - SR_b) / sqrt(theta)
+
+    ``p`` = Phi(z) is the probability that ``a``'s true Sharpe is the higher.
+    With ``n_trials`` looks at the same data the claim has to survive all of
+    them (Sidak): ``p_deflated`` = p ** n_trials.
+
+    This tests what the hypotheses claim — a higher Sharpe ratio. (An
+    information ratio would test a higher *return*, and would reject a
+    strategy that is better per unit of risk while holding less.) The test
+    assumes roughly normal returns; fat tails make it somewhat optimistic.
+    """
+    a = np.asarray(returns_a, dtype=float)
+    b = np.asarray(returns_b, dtype=float)
+    if a.shape != b.shape:
+        raise ValueError("the two return series must cover the same days")
+    keep = np.isfinite(a) & np.isfinite(b)
+    a, b = a[keep], b[keep]
+    t = len(a)
+    if t < 3:
+        raise ValueError("need at least three returns")
+    sd_a, sd_b = a.std(ddof=1), b.std(ddof=1)
+    if sd_a == 0 or sd_b == 0:
+        raise ValueError("a return series has no variation")
+    sr_a, sr_b = a.mean() / sd_a, b.mean() / sd_b
+    rho = float(np.corrcoef(a, b)[0, 1])
+    theta = (2.0 * (1.0 - rho) + 0.5 * (sr_a**2 + sr_b**2 - 2.0 * sr_a * sr_b * rho**2)) / t
+    if theta <= 0:  # identical series: no difference can be measured
+        z, p = 0.0, 0.5
+    else:
+        z = float((sr_a - sr_b) / math.sqrt(theta))
+        p = _N.cdf(z)
+    return {
+        "sharpe_a_annualized": float(sr_a * math.sqrt(252)),
+        "sharpe_b_annualized": float(sr_b * math.sqrt(252)),
+        "correlation": rho,
+        "observations": t,
+        "z": z,
+        "p": p,
+        "trials": n_trials,
+        "p_deflated": p**n_trials,
+    }
+
+
 def deflated_sharpe(
     returns: Sequence[float], *, n_trials: int, trial_sharpes: Sequence[float] | None = None,
 ) -> dict[str, float]:

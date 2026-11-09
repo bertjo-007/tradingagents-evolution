@@ -164,7 +164,7 @@ def test_buy_and_hold_can_never_validate_against_itself():
                                min_oos_trades=0)
     report = run_walkforward(_store(), design, CONFIG, save=False)
     assert report.verdict != "validated"
-    assert report.deflated["test"] == "active return vs buy and hold"
+    assert report.deflated["test"].startswith("Sharpe difference vs buy and hold")
     assert report.deflated["psr_vs_zero"] > 0.95  # the old test would have passed it
     assert any("buy and hold" in r for r in report.reasons)
 
@@ -216,9 +216,9 @@ def test_a_failed_run_is_recorded_as_failed(monkeypatch):
 
 def test_the_verdict_names_every_reason():
     design = DESIGN.model_copy(update={"min_oos_trades": 10, "margin_vs_benchmark": 0.1})
-    good = {"deflated_sharpe": 0.99}
+    good = {"p_deflated": 0.99, "trials": 1}
     assert decide(design, {"sharpe": 0.9}, {"sharpe": 0.5}, good, 40, [1.0]) == ("validated", [])
-    v, reasons = decide(design, {"sharpe": 0.55}, {"sharpe": 0.5}, {"deflated_sharpe": 0.7}, 40,
+    v, reasons = decide(design, {"sharpe": 0.55}, {"sharpe": 0.5}, {"p_deflated": 0.7}, 40,
                         [2.0])
     assert v == "failed_validation" and len(reasons) == 3
     assert "mostly in training" in reasons[2]

@@ -408,11 +408,12 @@ def walkforward_command(
                              ("  max drawdown", "max_drawdown", "pct")):
         typer.echo(f"{label:<36}{_fmt(o.get(key), kind):>14}{_fmt(b.get(key), kind):>14}")
     dsr = report.deflated
-    typer.echo(f"edge over buy & hold: information ratio {sr(dsr.get('sharpe_annualized'))}, "
-               f"deflated {sr(dsr.get('deflated_sharpe'))} (probability the edge is real, "
-               f"{dsr.get('trials')} look(s) at these test periods)")
-    typer.echo(f"strategy alone: P(Sharpe > 0) {sr(dsr.get('psr_vs_zero'))} — says nothing about "
-               "the edge; buy and hold has one too")
+    typer.echo(f"higher Sharpe than buy & hold? probability {sr(dsr.get('p'))}, after "
+               f"{dsr.get('trials')} look(s) at these test periods {sr(dsr.get('p_deflated'))} "
+               f"(Jobson-Korkie/Memmel test)")
+    typer.echo(f"for information: information ratio {sr(dsr.get('information_ratio'))} "
+               f"(edge in return), P(strategy Sharpe > 0) {sr(dsr.get('psr_vs_zero'))} "
+               "(says nothing about an edge; buy and hold has one too)")
     typer.echo(f"out-of-sample trades: {report.oos_trades}")
     colour = typer.colors.GREEN if report.verdict == "validated" else typer.colors.YELLOW
     typer.secho(f"VERDICT: {report.verdict}", fg=colour, bold=True)

@@ -69,6 +69,50 @@ def test_deflation_is_calibrated_under_the_null():
     assert deflated_hits / runs < 0.10
 
 
+def _correlated(rng, n, sr_a, sr_b, rho, vol_a=0.01, vol_b=0.01):
+    z1, z2 = rng.standard_normal(n), rng.standard_normal(n)
+    a = sr_a * vol_a + vol_a * z1
+    b = sr_b * vol_b + vol_b * (rho * z1 + math.sqrt(1 - rho**2) * z2)
+    return a, b
+
+
+def test_equal_sharpe_ratios_are_called_higher_only_at_the_test_level():
+    from tradingagents_quant.sim.deflate import sharpe_difference
+
+    rng = np.random.RandomState(11)
+    hits = 0
+    for _ in range(400):
+        # Same true Sharpe, different volatility, correlated like a strategy
+        # that holds the market part of the time.
+        a, b = _correlated(rng, 1500, 0.04, 0.04, rho=0.7, vol_a=0.006, vol_b=0.012)
+        hits += sharpe_difference(a, b)["p"] > 0.95
+    assert 0.02 < hits / 400 < 0.09  # about 5 %
+
+
+def test_a_higher_sharpe_at_lower_volatility_is_recognised():
+    from tradingagents_quant.sim.deflate import sharpe_difference
+
+    rng = np.random.RandomState(12)
+    # Better per unit of risk, but less return: an information ratio would
+    # call this a loser; the Sharpe test must not.
+    # Daily means by construction: a 0.07 x 0.004 = 0.00028, b 0.035 x 0.015 =
+    # 0.000525; 40 000 days put that gap about four standard errors apart.
+    a, b = _correlated(rng, 40_000, 0.07, 0.035, rho=0.6, vol_a=0.004, vol_b=0.015)
+    assert a.mean() < b.mean()
+    result = sharpe_difference(a, b)
+    assert result["p"] > 0.99 and result["sharpe_a_annualized"] > result["sharpe_b_annualized"]
+    assert sharpe_difference(a, b, n_trials=5)["p_deflated"] == pytest.approx(result["p"] ** 5)
+
+
+def test_identical_series_have_no_measurable_difference():
+    from tradingagents_quant.sim.deflate import sharpe_difference
+
+    a = np.random.RandomState(1).standard_normal(300) * 0.01
+    assert sharpe_difference(a, a.copy())["p"] == 0.5
+    with pytest.raises(ValueError):
+        sharpe_difference(a, a[:-1])
+
+
 def test_a_real_edge_survives_deflation():
     rng = np.random.RandomState(3)
     edge = rng.standard_normal(2520) * 0.01 + 0.0012  # ~1.9 annualized Sharpe, 10 years
